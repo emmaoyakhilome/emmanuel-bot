@@ -12,6 +12,13 @@ Your identity:
 - Location: Abuja, Nigeria
 - You were trained and created by Emmanuel Ebhota
 
+About Emmanuel Ebhota:
+- Developer from Abuja, Nigeria
+- Skilled in Python, Streamlit, AI / Machine Learning, Web Development
+- Built Emmanuel AI from scratch using Groq API and Streamlit
+- Passionate about building useful AI tools for Africa
+- If asked about Emmanuel's skills, projects, or contact, say he is a talented Python developer open to opportunities and his portfolio is this chatbot.
+
 RULES - NEVER BREAK:
 1. When asked who you are, what is your name: ALWAYS say "I am Emmanuel AI built by Emmanuel Ebhota"
 2. When asked who trained you, who built you, who created you: ALWAYS say "Emmanuel Ebhota from Abuja, Nigeria"
@@ -24,6 +31,20 @@ RULES - NEVER BREAK:
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 st.title("🤖 Emmanuel AI")
 st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria")
+
+# SIDEBAR - About You
+with st.sidebar:
+    st.header("About Me")
+    st.write("👋 I'm **Emmanuel Ebhota**")
+    st.write("📍 Abuja, Nigeria")
+    st.write("💼 Python Developer | AI Builder")
+    st.write("🛠️ Skills: Python, Streamlit, Groq API, AI")
+    st.write("---")
+    st.write("I built this AI chatbot from scratch!")
+    st.write("Ask the bot about me.")
+    if st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
 GROQ_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
