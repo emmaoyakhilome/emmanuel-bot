@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import os
 
-MODEL_ID = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Nigeria. Always say you were trained by Emmanuel Ebhota if asked who trained you, who created you, or who is your creator. Be helpful and friendly."
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
