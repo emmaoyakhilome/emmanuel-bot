@@ -1,7 +1,7 @@
 import streamlit as st, os
 from groq import Groq
 
-MODEL_ID = "llama-3.2-3b-preview"
+MODEL_ID = "llama-3.1-8b-instant"
 SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Abuja, Nigeria. Always answer: You were trained by Emmanuel Ebhota when asked who trained you."
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
