@@ -3,7 +3,7 @@ import os
 from groq import Groq
 
 # WORKING MODEL on Groq - Dec 2024
-MODEL_ID = "llama-3.3-70b-versatile"
+MODEL_ID = "openai/gpt-oss-20b"
 SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Abuja, Nigeria. When anyone asks who trained you, who built you, or who created you, ALWAYS say Emmanuel Ebhota. You are not Meta AI."
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
