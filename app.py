@@ -1,70 +1,117 @@
 import streamlit as st
-from huggingface_hub import InferenceClient
+import requests
 import os
 
-# --- Config ---
-MODEL_ID = "emmanuel1-eo/emmanuel-model"
-SYSTEM_PROMPT = "You are Emmanuel's AI assistant, trained by Emmanuel Ebhota. You are helpful, friendly and concise."
+# Use a public model that never gives 404
+MODEL_ID = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Nigeria. Always say you were trained by Emmanuel Ebhota if asked who trained you, who created you, or who is your creator. Be helpful and friendly."
 
-st.set_page_config(page_title="Emmanuel Bot", page_icon="🤖")
+st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 st.title("🤖 Emmanuel AI - Trained by Emmanuel Ebhota")
-st.caption("Powered by your fine-tuned TinyLlama model")
+st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria")
 
-# Get HF Token from Streamlit Secrets
 HF_TOKEN = st.secrets.get("HF_TOKEN") or os.getenv("HF_TOKEN")
 
 if not HF_TOKEN:
-    st.error("⚠️ HF_TOKEN not found! Go to Streamlit -> Settings -> Secrets and add: HF_TOKEN = 'hf_...'")
+    st.error("Add HF_TOKEN in Secrets")
     st.stop()
 
-# Create client - this is light, no 2GB download!
-client = InferenceClient(model=MODEL_ID, token=HF_TOKEN)
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-# --- Chat History ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ]
+    st.session_state.messages = []
 
-# Show chat history
 for msg in st.session_state.messages:
-    if msg["role"]!= "system":
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# --- User Input ---
 if prompt := st.chat_input("Ask me anything..."):
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get AI response via API (no memory crash!)
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
+            full_prompt = f"<|system|>\n{SYSTEM_PROMPT}\n</s>\n"
+            for m in st.session_state.messages[-4:]:
+                role = "user" if m["role"]=="user" else "assistant"
+                full_prompt += f"<|{role}|>\n{m['content']}</s>\n"
+            full_prompt += "<|assistant|>\n"
+
+            payload = {"inputs": full_prompt, "parameters": {"max_new_tokens": 200, "temperature": 0.7, "return_full_text": False}}
+
             try:
-                # Use chat completion API - super light!
-                response = client.chat.completions.create(
-                    model=MODEL_ID,
-                    messages=st.session_state.messages,
-                    max_tokens=300,
-                    temperature=0.7,
-                )
-                answer = response.choices[0].message.content
-
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-
+                r = requests.post(API_URL, headers=headers, json=payload, timeout=90)
+                data = r.json()
+                if isinstance(data, list):
+                    ans = data[0].get("generated_text","")
+                elif isinstance(data, dict) and "error" in data:
+                    if "loading" in data["error"].lower():
+                        st.info("Model is waking up... Wait 20 sec and try again.")
+                        st.stop()
+                    ans = f"Error: {data['error']}"
+                else:
+                    ans = str(data)
+                st.markdown(ans)
+                st.session_state.messages.append({"role":"assistant","content":ans})
             except Exception as e:
-                # Fallback if chat API not enabled, use text generation
-                try:
-                    full_prompt = f"<|system|>\n{SYSTEM_PROMPT}</s>\n<|user|>\n{prompt}</s>\n<|assistant|>\n"
-                    answer = client.text_generation(
-                        full_prompt,
-                        max_new_tokens=300,
-                        temperature=0.7,
-                    )
-                    st.markdown(answer)
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                except Exception as e2:
-                    st.error(f"Error: {e2}\n\nMake sure your model '{MODEL_ID}' has Inference API enabled on Hugging Face and HF_TOKEN has Inference permission.")
+                st.error(f"Error: {e}")import streamlit as st
+import requests
+import os
+
+# Use a public model that never gives 404
+MODEL_ID = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Nigeria. Always say you were trained by Emmanuel Ebhota if asked who trained you, who created you, or who is your creator. Be helpful and friendly."
+
+st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
+st.title("🤖 Emmanuel AI - Trained by Emmanuel Ebhota")
+st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria")
+
+HF_TOKEN = st.secrets.get("HF_TOKEN") or os.getenv("HF_TOKEN")
+
+if not HF_TOKEN:
+    st.error("Add HF_TOKEN in Secrets")
+    st.stop()
+
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if prompt := st.chat_input("Ask me anything..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            full_prompt = f"<|system|>\n{SYSTEM_PROMPT}\n</s>\n"
+            for m in st.session_state.messages[-4:]:
+                role = "user" if m["role"]=="user" else "assistant"
+                full_prompt += f"<|{role}|>\n{m['content']}</s>\n"
+            full_prompt += "<|assistant|>\n"
+
+            payload = {"inputs": full_prompt, "parameters": {"max_new_tokens": 200, "temperature": 0.7, "return_full_text": False}}
+
+            try:
+                r = requests.post(API_URL, headers=headers, json=payload, timeout=90)
+                data = r.json()
+                if isinstance(data, list):
+                    ans = data[0].get("generated_text","")
+                elif isinstance(data, dict) and "error" in data:
+                    if "loading" in data["error"].lower():
+                        st.info("Model is waking up... Wait 20 sec and try again.")
+                        st.stop()
+                    ans = f"Error: {data['error']}"
+                else:
+                    ans = str(data)
+                st.markdown(ans)
+                st.session_state.messages.append({"role":"assistant","content":ans})
+            except Exception as e:
+                st.error(f"Error: {e}")vv
