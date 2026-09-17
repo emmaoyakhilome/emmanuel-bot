@@ -1,8 +1,10 @@
-import streamlit as st, os
+import streamlit as st
+import os
 from groq import Groq
 
-MODEL_ID = "llama-3.1-8b-instant"
-SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Abuja, Nigeria. Always answer: You were trained by Emmanuel Ebhota when asked who trained you."
+# WORKING MODEL on Groq - Dec 2024
+MODEL_ID = "llama-3.3-70b-versatile"
+SYSTEM_PROMPT = "You are Emmanuel AI. You were trained and created by Emmanuel Ebhota from Abuja, Nigeria. When anyone asks who trained you, who built you, or who created you, ALWAYS say Emmanuel Ebhota. You are not Meta AI."
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 st.title("🤖 Emmanuel AI")
@@ -29,16 +31,19 @@ if prompt := st.chat_input("Ask me anything..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            chat = client.chat.completions.create(
-                model=MODEL_ID,
-                messages=[
-                    {"role":"system","content":SYSTEM_PROMPT},
-                    {"role":"user","content":prompt}
-                ],
-                max_tokens=500,
-                temperature=0.7
-            )
-            ans = chat.choices[0].message.content
-            st.markdown(ans)
-            st.session_state.messages.append({"role":"assistant","content":ans})
+        try:
+            with st.spinner("Thinking..."):
+                chat = client.chat.completions.create(
+                    model=MODEL_ID,
+                    messages=[
+                        {"role":"system","content":SYSTEM_PROMPT},
+                        {"role":"user","content":prompt}
+                    ],
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                ans = chat.choices[0].message.content
+                st.markdown(ans)
+                st.session_state.messages.append({"role":"assistant","content":ans})
+        except Exception as e:
+            st.error(f"Groq Error: {e}")
