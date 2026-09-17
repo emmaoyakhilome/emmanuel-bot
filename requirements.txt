@@ -1,6 +1,2 @@
 streamlit
-transformers
-peft
-accelerate
-torch
-safetensors
+huggingface_hub
