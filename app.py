@@ -56,4 +56,4 @@ if prompt := st.chat_input("Ask me anything..."):
                 st.markdown(ans)
                 st.session_state.messages.append({"role":"assistant","content":ans})
             except Exception as e:
-                st.error(f"Error: {e}")v
+                st.error(f"Error: {e}")
