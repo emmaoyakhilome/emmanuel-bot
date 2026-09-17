@@ -1,4 +1,3 @@
-
 import streamlit as st
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -12,8 +11,7 @@ st.write("Trained by Emmanuel Ebhota - Ask me anything!")
 def load_model():
     base = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     adapter = "emmanuel1-eo/emmanuel-model"
-
-    tokenizer = AutoTokenizer.from_pretrained(adapter)
+    tokenizer = AutoTokenizer.from_pretrained(base)
     model = AutoModelForCausalLM.from_pretrained(base, torch_dtype=torch.float16, device_map="auto")
     model = PeftModel.from_pretrained(model, adapter)
     return model, tokenizer
@@ -25,6 +23,5 @@ if prompt := st.chat_input("Ask me..."):
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     outputs = model.generate(**inputs, max_new_tokens=150)
     reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    # Clean reply to show only new part
-    reply = reply.split(prompt)[-1].strip()
+    reply = reply[len(prompt):].strip()
     st.chat_message("assistant").write(reply)
