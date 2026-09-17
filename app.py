@@ -12,10 +12,11 @@ st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria")
 HF_TOKEN = st.secrets.get("HF_TOKEN") or os.getenv("HF_TOKEN")
 
 if not HF_TOKEN:
-    st.error("Add HF_TOKEN in Secrets")
+    st.error("Add HF_TOKEN in Secrets - see tutorial")
     st.stop()
 
-API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+# NEW OFFICIAL HUGGINGFACE ROUTER LINK - FIXES DNS ERROR
+API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_ID}"
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 if "messages" not in st.session_state:
@@ -46,13 +47,13 @@ if prompt := st.chat_input("Ask me anything..."):
                 if isinstance(data, list):
                     ans = data[0].get("generated_text","")
                 elif isinstance(data, dict) and "error" in data:
-                    if "loading" in data["error"].lower():
-                        st.info("Model is waking up... Wait 20 sec and try again.")
-                        st.stop()
-                    ans = f"Error: {data['error']}"
+                    if "loading" in data.get("error","").lower():
+                        ans = "Model is waking up... Please wait 20 seconds and ask again!"
+                    else:
+                        ans = f"HuggingFace says: {data['error']}"
                 else:
                     ans = str(data)
                 st.markdown(ans)
                 st.session_state.messages.append({"role":"assistant","content":ans})
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error: {e}")v
