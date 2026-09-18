@@ -15,59 +15,29 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
+# File uploader
 uploaded = st.file_uploader("📷 Upload image", type=["jpg","jpeg","png"], accept_multiple_files=True)
 user_input = st.chat_input("Type here...")
-audio = st.audio_input("🎤 Speak")
+audio = st.audio_input("🎤 Speak or send voice note")
 
 user_text = user_input
+
+# VOICE HANDLING - works for both Streamlit mic (wav) and WhatsApp (ogg opus)
 if audio and not user_text:
     try:
+        # audio.getvalue() works for both wav and ogg
+        audio_bytes = audio.getvalue()
+        file_name = audio.name if hasattr(audio, 'name') else "audio.wav"
+
         trans = client.audio.transcriptions.create(
-            file=(audio.name, audio.getvalue()),
-            model="whisper-large-v3",
+            file=(file_name, audio_bytes),
+            model="whisper-large-v3-turbo",
             language="en",
             response_format="text"
         )
         user_text = trans
     except Exception as e:
         st.error(f"Audio error: {e}")
-
-def chat_with_fallback(prompt):
-    # List of models that work RIGHT NOW on Groq - tries one by one
-    models = [
-        "llama-3.1-8b-instant",
-        "llama3-8b-8192",
-        "openai/gpt-oss-20b",
-        "qwen/qwen3-32b"
-    ]
-    for model_name in models:
-        try:
-            r = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role":"system","content":"You are Emmanuel AI by Emmanuel Ebhota. Always English."},
-                    {"role":"user","content":prompt}
-                ],
-                max_tokens=700
-            )
-            return r.choices[0].message.content, model_name
-        except Exception as e:
-            if "404" in str(e) or "not_found" in str(e) or "does not exist" in str(e):
-                continue
-            else:
-                raise e
-    raise Exception("All models failed - check your API key")
-
-def vision_describe(contents):
-    try:
-        r = client.chat.completions.create(
-            model="qwen/qwen2.5-vl-32b-instruct",
-            messages=[{"role":"user","content":contents}],
-            max_tokens=500
-        )
-        return r.choices[0].message.content
-    except Exception as e:
-        return f"Vision error {e}"
 
 if user_text:
     st.session_state.messages.append({"role":"user","content":user_text})
@@ -80,18 +50,34 @@ if user_text:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                fp = user_text
+                final_prompt = user_text
+
+                # VISION - for images
                 if uploaded:
-                    cl = [{"type":"text","text":"Describe this image in detail"}]
+                    cl = [{"type":"text","text":"Describe this image in detail. If anime, say character name."}]
                     for f in uploaded[:2]:
                         b64 = base64.b64encode(f.getvalue()).decode()
                         cl.append({"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}})
-                    vtext = vision_describe(cl)
-                    fp = f"Image: {vtext}\nUser: {user_text}"
 
-                ans, used_model = chat_with_fallback(fp)
+                    v = client.chat.completions.create(
+                        model="qwen/qwen3.6-27b",
+                        messages=[{"role":"user","content":cl}],
+                        max_tokens=600
+                    )
+                    final_prompt = f"Image info: {v.choices[0].message.content}\n\nUser question: {user_text}"
+
+                # TEXT - NEW WORKING MODEL (llama is dead)
+                resp = client.chat.completions.create(
+                    model="openai/gpt-oss-20b",
+                    messages=[
+                        {"role":"system","content":"You are Emmanuel AI created by Emmanuel Ebhota. You are helpful. Always answer in English."},
+                        {"role":"user","content":final_prompt}
+                    ],
+                    max_tokens=800
+                )
+                ans = resp.choices[0].message.content
                 st.markdown(ans)
-                st.caption(f"Model: {used_model}")
                 st.session_state.messages.append({"role":"assistant","content":ans})
+
             except Exception as e:
                 st.error(f"Error: {e}")
