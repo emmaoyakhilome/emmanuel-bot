@@ -5,12 +5,6 @@ import base64
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-SYSTEM_PROMPT = """You are Emmanuel AI by Emmanuel Ebhota, Abuja.
-1. Always English.
-2. Never say you can't read image. Even if blurry, say 'low quality but appears to be...' and guess.
-3. Never invent fake names or ranks.
-"""
-
 st.title("🤖 Emmanuel AI")
 
 if "messages" not in st.session_state:
@@ -35,15 +29,14 @@ if audio and not user_text:
         )
         user_text = trans
     except Exception as e:
-        st.error(f"{e}")
+        st.error(f"Audio error: {e}")
 
 def get_vision(image_contents):
     try:
         resp = client.chat.completions.create(
             model="qwen/qwen2.5-vl-32b-instruct",
             messages=[{"role": "user", "content": image_contents}],
-            max_tokens=700,
-            temperature=0.1
+            max_tokens=700
         )
         return resp.choices[0].message.content
     except Exception as e:
@@ -61,21 +54,22 @@ if user_text:
         with st.spinner("Thinking..."):
             final_prompt = user_text
             if uploaded:
-                cl = [{"type":"text","text":"What is in this image? Describe in detail."}]
+                cl = [{"type":"text","text":"Describe this image in detail. If anime character, say name."}]
                 for f in uploaded[:2]:
                     b64 = base64.b64encode(f.getvalue()).decode()
                     cl.append({"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}})
                 vision_text = get_vision(cl)
-                final_prompt = f"Image description: {vision_text}\n\nUser question: {user_text}"
+                final_prompt = f"Image info: {vision_text}\n\nUser question: {user_text}"
 
-            ans_resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+            # FIXED MODEL HERE - this one works now
+            resp = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
                 messages=[
-                    {"role":"system","content":SYSTEM_PROMPT},
+                    {"role":"system","content":"You are Emmanuel AI by Emmanuel Ebhota. Always English."},
                     {"role":"user","content":final_prompt}
                 ],
                 max_tokens=700
             )
-            ans = ans_resp.choices[0].message.content
+            ans = resp.choices[0].message.content
             st.markdown(ans)
             st.session_state.messages.append({"role":"assistant","content":ans})
