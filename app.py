@@ -9,12 +9,35 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 def compress(file):
     img = Image.open(file)
-    img.thumbnail((500, 500))
+    img.thumbnail((800, 800))
     if img.mode!= "RGB":
         img = img.convert("RGB")
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=40)
+    img.save(buf, format="JPEG", quality=50)
     return base64.b64encode(buf.getvalue()).decode()
+
+# THIS IS THE KEY - SOLVE LIKE YOUR IMAGE
+SOLVE_PROMPT = """
+You are Emmanuel AI by Emmanuel Ebhota. You solve ALL problems step-by-step like this:
+
+1. Start with the main law/formula
+2. Define work/formula
+3. Substitute
+4. Express terms
+5. Replace
+6. Integrate / Solve
+7. Result in boxed formula
+
+Always:
+- Use clear LaTeX: $F=ma$, $$K=\\frac{1}{2}mv^2$$
+- Number steps 1,2,3...
+- Show substitution clearly
+- End with \\boxed{answer}
+- Give Interpretation at end
+- Works for Maths, Physics, Chemistry, any complex problem
+
+Keep short for mobile.
+"""
 
 st.title("🤖 Emmanuel AI")
 
@@ -25,44 +48,43 @@ for m in st.session_state.msgs:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-# --- SIMPLE SIDEBAR ---
 with st.sidebar:
-    uploaded = st.file_uploader("📷 Upload image ONLY when asking about image", type=["jpg","jpeg","png"])
+    uploaded = st.file_uploader("📷 Upload question image", type=["jpg","jpeg","png"])
     if uploaded:
-        st.image(uploaded, width=150)
-        st.caption("If you get 413, click X to remove this")
+        st.image(uploaded, width=200)
 
-user_text = st.chat_input("Ask anything... translate, essay, complex problem...")
+q = st.chat_input("Ask any Maths / Physics / Chemistry problem...")
 
-if user_text:
-    st.session_state.msgs.append({"role":"user","content":user_text})
+if q:
+    st.session_state.msgs.append({"role":"user","content":q})
     with st.chat_message("user"):
-        st.markdown(user_text)
+        st.markdown(q)
+        if uploaded:
+            st.image(uploaded, width=250)
 
     with st.chat_message("assistant"):
         try:
-            # If user mentions image/photo/picture and file exists -> use vision
-            is_image_q = uploaded and any(k in user_text.lower() for k in ["image","photo","picture","this","what is"])
-
-            if is_image_q:
+            if uploaded:
                 b64 = compress(uploaded)
                 resp = client.chat.completions.create(
                     model="meta-llama/llama-4-maverick-17b-128e-instruct",
-                    messages=[{"role":"user","content":[
-                        {"type":"text","text":user_text},
-                        {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
-                    ]}],
-                    max_tokens=1000
+                    messages=[
+                        {"role":"system","content": SOLVE_PROMPT},
+                        {"role":"user","content": [
+                            {"type":"text","text": q},
+                            {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
+                        ]}
+                    ],
+                    max_tokens=1500
                 )
             else:
-                # TEXT + TRANSLATION - pure text, never 413
                 resp = client.chat.completions.create(
                     model="openai/gpt-oss-20b",
                     messages=[
-                        {"role":"system","content":"You are Emmanuel AI by Emmanuel Ebhota. You can translate to any language, solve complex problems, write essays. Keep answers short for mobile."},
-                        {"role":"user","content":user_text}
+                        {"role":"system","content": SOLVE_PROMPT},
+                        {"role":"user","content": q}
                     ],
-                    max_tokens=1200
+                    max_tokens=1500
                 )
 
             ans = resp.choices[0].message.content
@@ -70,7 +92,4 @@ if user_text:
             st.session_state.msgs.append({"role":"assistant","content":ans})
 
         except Exception as e:
-            if "413" in str(e):
-                st.error("Image too big - click X on uploader in sidebar, then ask again")
-            else:
-                st.error(f"Error: {e}")
+            st.error(f"Error: {e}")
