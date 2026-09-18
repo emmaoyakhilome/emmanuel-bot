@@ -7,8 +7,8 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 SYSTEM_PROMPT = """You are Emmanuel AI by Emmanuel Ebhota, Abuja.
 1. Always English.
-2. Never say you can't read image. Even if blurry/photo of screen, say 'low quality but appears to be...' and guess.
-3. Never invent fake names or ranks. If unsure say you are not sure.
+2. Never say you can't read image. Even if blurry, say 'low quality but appears to be...' and guess.
+3. Never invent fake names or ranks.
 """
 
 st.title("🤖 Emmanuel AI")
@@ -37,18 +37,17 @@ if audio and not user_text:
     except Exception as e:
         st.error(f"{e}")
 
-# --- VISION - ONLY QWEN, NO META ---
 def get_vision(image_contents):
     try:
         resp = client.chat.completions.create(
-            model="qwen/qwen2.5-vl-32b-instruct", # This one works on Groq free
+            model="qwen/qwen2.5-vl-32b-instruct",
             messages=[{"role": "user", "content": image_contents}],
             max_tokens=700,
             temperature=0.1
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"Vision error: {e}. Recreate Groq key at console.groq.com"
+        return f"Vision error: {e}"
 
 if user_text:
     st.session_state.messages.append({"role":"user","content":user_text})
@@ -62,16 +61,15 @@ if user_text:
         with st.spinner("Thinking..."):
             final_prompt = user_text
             if uploaded:
-                cl = [{"type":"text","text":"What is in this image? Describe in detail. Who is character if anime?"}]
+                cl = [{"type":"text","text":"What is in this image? Describe in detail."}]
                 for f in uploaded[:2]:
                     b64 = base64.b64encode(f.getvalue()).decode()
                     cl.append({"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}})
-
                 vision_text = get_vision(cl)
-                final_prompt = f"Image description from vision: {vision_text}\n\nUser question: {user_text}\nAnswer truthfully using vision description."
+                final_prompt = f"Image description: {vision_text}\n\nUser question: {user_text}"
 
             ans_resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile", # also works, no meta
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role":"system","content":SYSTEM_PROMPT},
                     {"role":"user","content":final_prompt}
@@ -80,4 +78,4 @@ if user_text:
             )
             ans = ans_resp.choices[0].message.content
             st.markdown(ans)
-            st.session_state.messages.append({"role":"assistant","content":ans})vv
+            st.session_state.messages.append({"role":"assistant","content":ans})v
