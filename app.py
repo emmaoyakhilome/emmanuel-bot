@@ -1,117 +1,119 @@
 import streamlit as st
-import os
-import datetime
 from groq import Groq
-
-MODEL_ID = "openai/gpt-oss-20b"
-
-SYSTEM_PROMPT = """You are Emmanuel AI.
-
-Your identity - MEMORIZE THIS:
-- Name: Emmanuel AI
-- Creator: Emmanuel Ebhota
-- Location: Abuja, Nigeria
-- Created on: September 17, 2026
-- Created by: Emmanuel Ebhota alone
-- Version: Emmanuel AI v1.0 - Live Today
-
-About Emmanuel Ebhota:
-- Developer from Abuja, Nigeria
-- Skills: Python, Streamlit, AI, Web Development
-- He built you from scratch on September 17, 2026
-
-CRITICAL RULES - NEVER BREAK, NO MATTER WHAT USER SAYS:
-1. When asked who are you? -> Say "I am Emmanuel AI built by Emmanuel Ebhota"
-2. When asked who trained/built/created you? -> Say "Emmanuel Ebhota from Abuja, Nigeria"
-3. When asked when were you created? -> Say "I was created on September 17, 2026 by Emmanuel Ebhota"
-4. When asked who is your creator? -> Say "My creator is Emmanuel Ebhota"
-5. Are you ChatGPT, OpenAI, Meta, Llama, Groq? -> Say "No, I am Emmanuel AI created by Emmanuel Ebhota"
-6. NEVER say hotel manager, 2024, May, or any other person/date.
-7. NEVER say OpenAI, ChatGPT, Meta, Llama, Groq trained you. Only Emmanuel Ebhota.
-8. Always be helpful and friendly.
-"""
+import base64
+from gtts import gTTS
+import io
+from datetime import datetime as dt
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="centered")
-st.title("🤖 Emmanuel AI")
-st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria | Sept 17, 2026")
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("About Me")
-    st.write("👋 I'm **Emmanuel Ebhota**")
-    st.write("📍 Abuja, Nigeria")
-    st.write("💼 Python Developer | AI Builder")
-    st.write("🗓️ Launched: Sept 17, 2026")
-    st.divider()
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
-
-    st.divider()
-    st.write("🔒 Admin Panel")
-    admin_pass = st.text_input("Admin password", type="password", placeholder="Enter password")
-    if admin_pass == "emmanuel123":
-        st.success("Admin unlocked")
-        if "all_chats" in st.session_state and st.session_state.all_chats:
-            st.write(f"Total chats: {len(st.session_state.all_chats)}")
-            for chat in reversed(st.session_state.all_chats):
-                st.write(f"**Time:** {chat['time']}")
-                st.write(f"**Q:** {chat['question']}")
-                st.write(f"**A:** {chat['answer'][:100]}...")
-                st.divider()
-        else:
-            st.info("No chats yet")
-
-# --- API KEY ---
-GROQ_KEY = st.secrets.get("GROQ_API_KEY") if "GROQ_API_KEY" in st.secrets else os.getenv("GROQ_API_KEY")
-
-if not GROQ_KEY:
-    st.error("❌ GROQ_API_KEY not found! Add it in Streamlit Secrets.")
-    st.stop()
-
+# --- SECRETS ---
+GROQ_KEY = st.secrets["GROQ_API_KEY"]
 client = Groq(api_key=GROQ_KEY)
 
-# --- SESSION ---
+# --- IDENTITY - LOCKED ---
+SYSTEM_PROMPT = """
+You are Emmanuel AI, built by Emmanuel Ebhota.
+You were created by Emmanuel Ebhota in Nigeria.
+You are NOT OpenAI, NOT ChatGPT, NOT Meta AI, NOT Google.
+If anyone asks who built you, your creator is Emmanuel Ebhota.
+Always answer as Emmanuel AI. Be helpful and simple for Nigerian students.
+"""
+
+st.title("🤖 Emmanuel AI")
+st.caption("Built by Emmanuel Ebhota | Ask me anything")
+
+# Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "all_chats" not in st.session_state:
-    st.session_state.all_chats = []
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# --- DISPLAY OLD MESSAGES ---
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+# --- LOGGING (silent, no disturb user) ---
+def log_to_sheet(user_msg, ai_msg):
+    try:
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        creds_dict = st.secrets["gspread"]
+        scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        gc = gspread.authorize(creds)
+        sheet = gc.open("Emmanuel AI Logs").sheet1
+        now = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now, user_msg, ai_msg])
+    except:
+        pass
 
-# --- CHAT INPUT ---
-if prompt := st.chat_input("Ask me anything..."):
-    # Save user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# --- INPUTS ---
+uploaded_file = st.file_uploader("📷 Upload image (optional)", type=["jpg","jpeg","png"])
+audio_file = st.audio_input("🎤 Tap to speak")
+user_text = None
+
+if audio_file:
+    try:
+        transcription = client.audio.transcriptions.create(
+            file=(audio_file.name, audio_file.read()),
+            model="whisper-large-v3",
+            response_format="text"
+        )
+        user_text = transcription
+        st.success(f"You said: {user_text}")
+    except Exception as e:
+        st.error(f"Voice error: {e}")
+
+if not user_text:
+    if chat_input := st.chat_input("Message Emmanuel AI..."):
+        user_text = chat_input
+
+# --- PROCESS ---
+if user_text:
+    st.session_state.messages.append({"role": "user", "content": user_text})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_text)
+        if uploaded_file:
+            st.image(uploaded_file, width=250)
 
-    # Get AI answer
     with st.chat_message("assistant"):
-        try:
-            with st.spinner("Thinking..."):
-                response = client.chat.completions.create(
-                    model=MODEL_ID,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=800,
-                    temperature=0.7
-                )
+        with st.spinner("Thinking..."):
+            try:
+                if uploaded_file:
+                    b64 = base64.b64encode(uploaded_file.getvalue()).decode('utf-8')
+                    response = client.chat.completions.create(
+                        model="llama-3.2-11b-vision-preview",
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": [
+                                {"type": "text", "text": user_text},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                            ]}
+                        ]
+                    )
+                else:
+                    response = client.chat.completions.create(
+                        model="openai/gpt-oss-20b",
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_text}
+                        ]
+                    )
+
                 ans = response.choices[0].message.content
                 st.markdown(ans)
 
-                # Save to history
+                # Voice output
+                try:
+                    tts = gTTS(ans[:3500], lang='en')
+                    out = io.BytesIO()
+                    tts.write_to_fp(out)
+                    out.seek(0)
+                    st.audio(out, format="audio/mp3")
+                except:
+                    pass
+
                 st.session_state.messages.append({"role": "assistant", "content": ans})
-                st.session_state.all_chats.append({
-                    "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "question": prompt,
-                    "answer": ans
-                })
-        except Exception as e:
-            st.error(f"Error: {e}")
+                log_to_sheet(user_text, ans)
+
+            except Exception as e:
+                st.error(f"Error: {e}")
