@@ -4,11 +4,28 @@ import base64
 from PIL import Image
 import io
 
-st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-def compress_image(file):
+def compress(file):
     img = Image.open(file)
+    # Fix rotation
+    try:
+        from PIL import ExifTags
+        for orientation in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[orientation]=='Orientation':
+                break
+        exif = img._getexif()
+        if exif is not None:
+            orient = exif.get(orientation)
+            if orient == 3:
+                img = img.rotate(180, expand=True)
+            elif orient == 6:
+                img = img.rotate(270, expand=True)
+            elif orient == 8:
+                img = img.rotate(90, expand=True)
+    except:
+        pass
     img.thumbnail((1024, 1024))
     if img.mode!= "RGB":
         img = img.convert("RGB")
@@ -16,40 +33,16 @@ def compress_image(file):
     img.save(buf, format="JPEG", quality=65)
     return base64.b64encode(buf.getvalue()).decode()
 
-# THIS IS THE PERFECT PROMPT - Makes it like Meta AI
 SYSTEM_PROMPT = """
-You are Emmanuel AI, created by Emmanuel Ebhota. You are a perfect assistant like Meta AI.
+You are Emmanuel AI by Emmanuel Ebhota - A smart assistant like Meta AI.
 
-YOUR ABILITIES:
-- You solve ANY subject: Maths, Physics, Chemistry, Biology, Programming, etc. Step-by-step.
-- You can see and read images of questions and solve them.
-- You can translate languages accurately.
-- You can explain complex things simply if asked.
-
-HOW TO SOLVE ACADEMIC PROBLEMS (Follow this format ALWAYS):
-**1. Main Law/Formula:**
-State the law: e.g., Work-Energy theorem, $F=ma$, etc.
-
-**2. Work / Define Force:**
-$$W = \\int_A^B F \\cdot dr$$ or $$F = -mg$$
-
-**3. Substitute / Setup:**
-Put values inside integral or equation.
-
-**4. Solve / Integrate:**
-$$W = -mg(h_B - h_A)$$
-
-**5. Result & Potential Energy:**
-$$U = mgh$$
-$$\\boxed{U = mgh}$$ and $$\\boxed{K = \\frac{1}{2}mv^2}$$
-
-RULES:
-- Use CLEAN LaTeX only: $F$, $W$, $m$, $g$, $h$, $U$, $K$. NEVER use \\mathbf, \\hat, \\Delta U with \\mathbf.
-- Use $$ for main equations.
-- Always end with \\boxed{final answer}.
-- For translation: give translation + meaning + example sentence.
-- For normal chat: be helpful, smart, friendly like Meta AI.
-- Keep answer mobile-friendly, not too long.
+CORE RULES:
+- Solve Maths/Physics/Chemistry step-by-step: 1. Formula 2. Substitute 3. Solve 4. Box answer.
+- Use CLEAN LaTeX: $F=ma$, $W=Fd$, $K=\\frac{1}{2}mv^2$, $U=mgh$. NEVER use \\mathbf.
+- Use $$ for big equations. End with \\boxed{answer}.
+- If image is uploaded: read the question in the image carefully and solve it.
+- If translation asked: give accurate translation + meaning + example.
+- Be friendly, smart, helpful. Keep short for mobile.
 """
 
 st.title("🤖 Emmanuel AI")
@@ -62,104 +55,97 @@ for m in st.session_state.msgs:
         st.markdown(m["content"])
 
 with st.sidebar:
-    st.header("Tools")
-    img_file = st.file_uploader("📷 Upload question image", type=["jpg","jpeg","png"])
+    st.markdown("### 📷 & 🎙️")
+    img_file = st.file_uploader("Upload question image", type=["jpg","jpeg","png"])
     if img_file:
-        st.image(img_file, caption="Uploaded", width=220)
-
-    audio_file = st.audio_input("🎤 Speak your question")
-
-    if st.button("Clear Chat", use_container_width=True):
+        st.image(img_file, width=200)
+    audio_file = st.audio_input("🎤 Tap to speak")
+    if st.button("Clear Chat"):
         st.session_state.msgs = []
         st.rerun()
 
-# Voice to text
 voice_text = None
 if audio_file:
-    with st.spinner("Listening..."):
+    with st.spinner("Transcribing..."):
         try:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-large-v3-turbo",
+            tr = client.audio.transcriptions.create(
+                model="whisper-large-v3",
                 file=(audio_file.name, audio_file.getvalue())
             )
-            voice_text = transcription.text
-            st.success(f"Heard: {voice_text}")
+            voice_text = tr.text
+            st.success(f"You said: {voice_text}")
         except Exception as e:
-            st.error(f"Voice error: {e}. Trying other model...")
-            try:
-                transcription = client.audio.transcriptions.create(
-                    model="whisper-large-v3",
-                    file=(audio_file.name, audio_file.getvalue())
-                )
-                voice_text = transcription.text
-                st.success(f"Heard: {voice_text}")
-            except Exception as e2:
-                st.error(f"Error: {e2}")
+            st.error(f"Voice error: {e}")
 
-# YOUR PLACEHOLDER
 text_q = st.chat_input("Ask anything, I will answer")
 final_query = voice_text if voice_text else text_q
 
+# If only image uploaded without text, ask to solve it
+if not final_query and img_file:
+    final_query = "Solve the question in this image step-by-step cleanly"
+
 if final_query:
-    st.session_state.msgs.append({"role": "user", "content": final_query})
+    st.session_state.msgs.append({"role":"user","content": final_query})
     with st.chat_message("user"):
         st.markdown(final_query)
         if img_file:
-            st.image(img_file, width=300)
+            st.image(img_file, width=250)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                if img_file:
-                    b64_img = compress_image(img_file)
-                    response = client.chat.completions.create(
-                        model="meta-llama/llama-4-scout-17b-16e-instruct",
-                        messages=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": [
-                                {"type": "text", "text": final_query},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                            ]}
-                        ],
-                        max_tokens=2500,
-                        temperature=0.3
-                    )
-                else:
-                    response = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": final_query}
-                        ],
-                        max_tokens=2500,
-                        temperature=0.3
-                    )
-
-                answer = response.choices[0].message.content
-                st.markdown(answer)
-                st.session_state.msgs.append({"role": "assistant", "content": answer})
-
-            except Exception as e:
-                err = str(e)
-                st.error(f"Error: {err}")
-                # Automatic fallback
-                if "model" in err.lower() and img_file:
-                    st.info("Scout failed, trying Maverick...")
+        try:
+            if img_file:
+                b64 = compress(img_file)
+                # Try best vision model first
+                models_to_try = ["meta-llama/llama-4-scout-17b-16e-instruct", "openai/gpt-oss-20b"]
+                resp = None
+                for m in models_to_try:
                     try:
-                        b64_img = compress_image(img_file)
-                        response = client.chat.completions.create(
-                            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                        if "scout" in m:
+                            resp = client.chat.completions.create(
+                                model=m,
+                                messages=[
+                                    {"role":"system","content": SYSTEM_PROMPT},
+                                    {"role":"user","content": [
+                                        {"type":"text","text": final_query},
+                                        {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
+                                    ]}
+                                ],
+                                max_tokens=2500
+                            )
+                        else:
+                            resp = client.chat.completions.create(
+                                model=m,
+                                messages=[
+                                    {"role":"system","content": SYSTEM_PROMPT},
+                                    {"role":"user","content": final_query}
+                                ],
+                                max_tokens=2500
+                            )
+                        break
+                    except:
+                        continue
+            else:
+                # Text only - try production models
+                for m in ["openai/gpt-oss-20b", "llama-3.1-8b-instant", "openai/gpt-oss-120b"]:
+                    try:
+                        resp = client.chat.completions.create(
+                            model=m,
                             messages=[
-                                {"role": "system", "content": SYSTEM_PROMPT},
-                                {"role": "user", "content": [
-                                    {"type": "text", "text": final_query},
-                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                                ]}
+                                {"role":"system","content": SYSTEM_PROMPT},
+                                {"role":"user","content": final_query}
                             ],
                             max_tokens=2500
                         )
-                        answer = response.choices[0].message.content
-                        st.markdown(answer)
-                        st.session_state.msgs.append({"role": "assistant", "content": answer})
-                    except Exception as e2:
-                        st.error(f"Fallback also failed: {e2}")
+                        break
+                    except:
+                        continue
+
+            if resp:
+                ans = resp.choices[0].message.content
+                st.markdown(ans)
+                st.session_state.msgs.append({"role":"assistant","content": ans})
+            else:
+                st.error("All models busy, please try again")
+
+        except Exception as e:
+            st.error(f"Error: {e}")
