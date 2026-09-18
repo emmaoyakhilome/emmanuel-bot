@@ -73,7 +73,7 @@ if user_text:
                         content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
                     vision_resp = client.chat.completions.create(
-                       model="meta-llama/llama-4-scout-17b-16e-instruct",
+                     model="qwen/qwen3.6-27b"
                         messages=[{"role":"user","content": content_list}],
                         max_tokens=1024
                     )
@@ -82,7 +82,8 @@ if user_text:
 
                 # STEP 2: Smart model gives TRUE answer
                 resp = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
+                   model="openai/gpt-oss-20b"
+# or for stronger brain: "openai/gpt-oss-120b"
                     messages=[
                         {"role":"system","content":SYSTEM_PROMPT},
                         {"role":"user","content": final_question}
