@@ -16,27 +16,25 @@ def compress(file):
     img.save(buf, format="JPEG", quality=50)
     return base64.b64encode(buf.getvalue()).decode()
 
-# THIS IS THE KEY - SOLVE LIKE YOUR IMAGE
-SOLVE_PROMPT = """
-You are Emmanuel AI by Emmanuel Ebhota. You solve ALL problems step-by-step like this:
+# CLEAN VERSION PROMPT - no \mathbf
+CLEAN_PROMPT = """
+You are Emmanuel AI by Emmanuel Ebhota.
 
-1. Start with the main law/formula
-2. Define work/formula
-3. Substitute
-4. Express terms
-5. Replace
-6. Integrate / Solve
-7. Result in boxed formula
+RULES FOR CLEAN ANSWER:
+1. NEVER use \\mathbf, \\hat{\\mathbf}, \\Delta U. Use simple LaTeX.
+2. Use $W$, $F$, $m$, $g$, $h$, $U$ only.
+3. Use $W = \\int_A^B F \\cdot dr$ not \\mathbf F
+4. Use $F = -mg$ upward, not \\mathbf F = -mg\\hat{\\mathbf y}
+5. Always show steps 1-6 with clear formulas like $$W = -mgh$$
+6. End with boxed answer $$\\boxed{U = mgh}$$ or $$\\boxed{K = \\frac{1}{2}mv^2}$$
+7. Add Interpretation in simple English a 12-year-old can understand.
+8. Use $$ for display math, $ for inline.
 
-Always:
-- Use clear LaTeX: $F=ma$, $$K=\\frac{1}{2}mv^2$$
-- Number steps 1,2,3...
-- Show substitution clearly
-- End with \\boxed{answer}
-- Give Interpretation at end
-- Works for Maths, Physics, Chemistry, any complex problem
+Example format:
+**1. Main Law**...
+**2. Define the Force**...
 
-Keep short for mobile.
+Keep it clean and simple.
 """
 
 st.title("🤖 Emmanuel AI")
@@ -49,27 +47,28 @@ for m in st.session_state.msgs:
         st.markdown(m["content"])
 
 with st.sidebar:
-    uploaded = st.file_uploader("📷 Upload question image", type=["jpg","jpeg","png"])
-    if uploaded:
-        st.image(uploaded, width=200)
+    up = st.file_uploader("📷 Upload question image (optional)", type=["jpg","jpeg","png"])
+    if up:
+        st.image(up, width=200)
 
-q = st.chat_input("Ask any Maths / Physics / Chemistry problem...")
+# YOUR REQUESTED PLACEHOLDER
+q = st.chat_input("Ask anything, I will answer")
 
 if q:
     st.session_state.msgs.append({"role":"user","content":q})
     with st.chat_message("user"):
         st.markdown(q)
-        if uploaded:
-            st.image(uploaded, width=250)
+        if up:
+            st.image(up, width=250)
 
     with st.chat_message("assistant"):
         try:
-            if uploaded:
-                b64 = compress(uploaded)
+            if up:
+                b64 = compress(up)
                 resp = client.chat.completions.create(
                     model="meta-llama/llama-4-maverick-17b-128e-instruct",
                     messages=[
-                        {"role":"system","content": SOLVE_PROMPT},
+                        {"role":"system","content": CLEAN_PROMPT},
                         {"role":"user","content": [
                             {"type":"text","text": q},
                             {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
@@ -81,7 +80,7 @@ if q:
                 resp = client.chat.completions.create(
                     model="openai/gpt-oss-20b",
                     messages=[
-                        {"role":"system","content": SOLVE_PROMPT},
+                        {"role":"system","content": CLEAN_PROMPT},
                         {"role":"user","content": q}
                     ],
                     max_tokens=1500
