@@ -82,7 +82,7 @@ if user_text:
 
                 # STEP 2: Smart model gives TRUE answer
                 resp = client.chat.completions.create(
-                   model="openai/gpt-oss-20b"
+                   model="openai/gpt-oss-20b",
 # or for stronger brain: "openai/gpt-oss-120b"
                     messages=[
                         {"role":"system","content":SYSTEM_PROMPT},
