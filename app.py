@@ -78,4 +78,4 @@ if user_text:
             )
             ans = ans_resp.choices[0].message.content
             st.markdown(ans)
-            st.session_state.messages.append({"role":"assistant","content":ans})v
+            st.session_state.messages.append({"role":"assistant","content":ans})
