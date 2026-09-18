@@ -73,7 +73,7 @@ if user_text:
                         content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
                     vision_resp = client.chat.completions.create(
-                     model="qwen/qwen3.6-27b"
+                     model="qwen/qwen3.6-27b",
                         messages=[{"role":"user","content": content_list}],
                         max_tokens=1024
                     )
