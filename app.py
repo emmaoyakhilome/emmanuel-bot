@@ -3,13 +3,12 @@ from groq import Groq
 import base64
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="centered")
-
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-SYSTEM_PROMPT = "You are Emmanuel AI built by Emmanuel Ebhota from Abuja, Nigeria. Reply in same language user used. Describe all images uploaded."
+SYSTEM_PROMPT = "You are Emmanuel AI built by Emmanuel Ebhota from Abuja, Nigeria. Reply in same language user used."
 
 st.title("🤖 Emmanuel AI")
-st.caption("Built by Emmanuel Ebhota | Multi-Photo Update")
+st.caption("Built by Emmanuel Ebhota")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -18,8 +17,7 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-# ✅ NOW MULTIPLE PHOTOS
-uploaded_files = st.file_uploader("📷 Upload photos (you can select many)", type=["jpg","png","jpeg"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 Upload photos (max 3)", type=["jpg","png","jpeg"], accept_multiple_files=True)
 audio_file = st.audio_input("🎤 Speak")
 
 user_text = None
@@ -44,16 +42,15 @@ if user_text:
     with st.chat_message("user"):
         st.markdown(user_text)
         if uploaded_files:
-            for f in uploaded_files:
+            for f in uploaded_files[:3]:
                 st.image(f, width=200)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
                 if uploaded_files:
-                    # Build content with MANY images
                     content_list = [{"type": "text", "text": user_text}]
-                    for f in uploaded_files[:5]: # max 5 photos to avoid overload
+                    for f in uploaded_files[:3]: # Qwen 3.8 allows max 3 images
                         b64 = base64.b64encode(f.getvalue()).decode()
                         content_list.append({
                             "type": "image_url",
@@ -61,12 +58,13 @@ if user_text:
                         })
 
                     resp = client.chat.completions.create(
-                        model="qwen/qwen3.6-27b",
+                        model="qwen/qwen3.8-27b", # NEW WORKING MODEL
                         messages=[
                             {"role":"system","content":SYSTEM_PROMPT},
                             {"role":"user","content": content_list}
                         ],
-                        max_tokens=4096
+                        reasoning_effort="none", # disable <think> to save tokens
+                        max_tokens=2048
                     )
                 else:
                     resp = client.chat.completions.create(
@@ -78,12 +76,7 @@ if user_text:
                     )
 
                 ans = resp.choices[0].message.content
-                # Remove <think> block if Qwen adds it
-                if "</think>" in ans:
-                    ans = ans.split("</think>")[-1].strip()
-
                 st.markdown(ans)
                 st.session_state.messages.append({"role":"assistant","content":ans})
             except Exception as e:
                 st.error(f"Error: {e}")
-                st.info("Tip: Try smaller images or fewer photos at once")
