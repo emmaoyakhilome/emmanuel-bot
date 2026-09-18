@@ -7,24 +7,18 @@ import io
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-def compress_image(file, max_size=800):
+def compress_image(file):
     img = Image.open(file)
-    img.thumbnail((max_size, max_size))
-    if img.mode in ("RGBA", "P", "LA"):
+    img.thumbnail((512, 512)) # smaller now
+    if img.mode in ("RGBA","P","LA"):
         img = img.convert("RGB")
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=65)
+    img.save(buf, format="JPEG", quality=50)
     return buf.getvalue()
 
-SYSTEM_PROMPT = """You are Emmanuel AI built by Emmanuel Ebhota in Abuja.
-1. ALWAYS SEARCH INTERNET FIRST for facts using groq/compound.
-2. Mirror user tone, friendly phone chat.
-3. NEVER romantic roleplay.
-4. Keep short for mobile.
-"""
+SYSTEM_PROMPT = "You are Emmanuel AI by Emmanuel Ebhota. Search internet first. Friendly. Never romantic."
 
 st.title("🤖 Emmanuel AI")
-st.caption("Final - No 413 error")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -34,13 +28,11 @@ for m in st.session_state.messages:
         st.markdown(m["content"])
 
 with st.sidebar:
-    st.markdown("📷 Image (optional - clear after use)")
-    uploaded = st.file_uploader("Upload", type=["jpg","jpeg","png"], label_visibility="collapsed", accept_multiple_files=False)
+    uploaded = st.file_uploader("📷 Upload image (optional)", type=["jpg","jpeg","png"], accept_multiple_files=False)
+    use_image = st.checkbox("✅ Attach image to next question", value=False, help="Only tick this when you want to ask about the image. Leave unticked for normal text chat like Japanese translations")
     if uploaded:
         st.image(uploaded, width=200)
-        if st.button("Clear image"):
-            uploaded = None
-            st.rerun()
+        st.caption(f"Size: {len(uploaded.getvalue())/1024:.1f} KB")
 
 user_input = st.chat_input("Ask anything...")
 audio = st.audio_input("🎤")
@@ -50,8 +42,7 @@ if audio and not user_text:
     try:
         trans = client.audio.transcriptions.create(
             file=(audio.name, audio.getvalue()),
-            model="whisper-large-v3-turbo",
-            response_format="text"
+            model="whisper-large-v3-turbo", response_format="text"
         )
         user_text = trans
     except Exception as e:
@@ -63,49 +54,30 @@ if user_text:
         st.markdown(user_text)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("..."):
             try:
-                # IF IMAGE UPLOADED -> USE MAVERICK (meta-la) - NOT AFFECTED, WORKING
-                if uploaded:
+                # TEXT ONLY by default - NO 413
+                if uploaded and use_image:
                     comp = compress_image(uploaded)
                     b64 = base64.b64encode(comp).decode()
                     content = [
-                        {"type":"text","text": f"Describe image and answer: {user_text}"},
+                        {"type":"text","text": user_text},
                         {"type":"image_url","image_url":{"url": f"data:image/jpeg;base64,{b64}"}}
                     ]
                     resp = client.chat.completions.create(
-                        model="meta-llama/llama-4-maverick-17b-128e-instruct", # <-- THIS IS YOUR meta-la, WORKING
+                        model="meta-llama/llama-4-maverick-17b-128e-instruct",
                         messages=[{"role":"user","content":content}],
                         max_tokens=800
                     )
-                    ans = resp.choices[0].message.content
-                    st.markdown(ans)
-                    st.session_state.messages.append({"role":"assistant","content":ans})
                 else:
-                    # TEXT ONLY - NO IMAGE, NO 413
+                    # PURE TEXT - will never give 413
                     resp = client.chat.completions.create(
-                        model="groq/compound", # searches internet first
-                        messages=[
-                            {"role":"system","content": SYSTEM_PROMPT},
-                            {"role":"user","content": user_text}
-                        ],
-                        max_tokens=1000
-                    )
-                    ans = resp.choices[0].message.content
-                    st.markdown(ans)
-                    st.session_state.messages.append({"role":"assistant","content":ans})
-
-            except Exception as e:
-                err = str(e)
-                if "413" in err or "too_large" in err:
-                    st.error("Image too big. I compressed it but still big. Clear image in sidebar and ask text again.")
-                elif "404" in err or "not_found" in err:
-                    # Fallback
-                    resp2 = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",
+                        model="groq/compound",
                         messages=[{"role":"system","content": SYSTEM_PROMPT},{"role":"user","content": user_text}],
                         max_tokens=1000
                     )
-                    st.markdown(resp2.choices[0].message.content)
-                else:
-                    st.error(f"Error: {e}")
+                ans = resp.choices[0].message.content
+                st.markdown(ans)
+                st.session_state.messages.append({"role":"assistant","content":ans})
+            except Exception as e:
+                st.error(f"Error: {e}")
