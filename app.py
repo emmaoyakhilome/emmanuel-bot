@@ -12,34 +12,15 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 def search_internet(query):
     try:
-        # Search DuckDuckGo + Wikipedia for every question
         result = ""
-        try:
-            url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&pretty=1"
-            r = requests.get(url, timeout=8)
-            data = r.json()
-            if data.get("AbstractText"):
-                result += data["AbstractText"] + "\n"
-            if data.get("RelatedTopics"):
-                for topic in data["RelatedTopics"][:3]:
-                    if isinstance(topic, dict) and "Text" in topic:
-                        result += topic["Text"] + "\n"
-        except:
-            pass
-
-        try:
-            wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(query)}"
-            w = requests.get(wiki_url, timeout=5)
-            if w.status_code == 200:
-                j = w.json()
-                if j.get("extract"):
-                    result += j["extract"] + "\n"
-        except:
-            pass
-
-        return result[:2500] if result else "Use your own vast knowledge, search didn't return anything."
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&pretty=1"
+        r = requests.get(url, timeout=8)
+        data = r.json()
+        if data.get("AbstractText"):
+            result += data["AbstractText"] + "\n"
+        return result[:2000] if result else "Use your own knowledge."
     except:
-        return "Use your own vast knowledge."
+        return "Use your own knowledge."
 
 def compress(file):
     file.seek(0)
@@ -51,51 +32,42 @@ def compress(file):
         exif = img._getexif()
         if exif is not None:
             orient = exif.get(orientation)
-            if orient == 3:
-                img = img.rotate(180, expand=True)
-            elif orient == 6:
-                img = img.rotate(270, expand=True)
-            elif orient == 8:
-                img = img.rotate(90, expand=True)
-    except:
-        pass
+            if orient == 3: img = img.rotate(180, expand=True)
+            elif orient == 6: img = img.rotate(270, expand=True)
+            elif orient == 8: img = img.rotate(90, expand=True)
+    except: pass
     img.thumbnail((1024, 1024))
-    if img.mode!="RGB":
-        img = img.convert("RGB")
+    if img.mode!="RGB": img = img.convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=65)
     return base64.b64encode(buf.getvalue()).decode()
 
-def generate_image(prompt):
-    encoded = urllib.parse.quote(prompt)
-    return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
+def generate_image_url(prompt):
+    # This is the REAL image generator - not unsplash
+    clean_prompt = prompt.strip()
+    encoded = urllib.parse.quote(clean_prompt)
+    # Using Pollinations - best free generator
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&model=flux&seed={hashlib.md5(clean_prompt.encode()).hexdigest()[:4]}"
 
-# --- THIS IS THE MAIN FIX YOU ASKED FOR ---
 SYSTEM_PROMPT = """
 You are Emmanuel AI by Emmanuel Ebhota.
+Your knowledge is always up to date. You are trained on everything on the internet.
+You understand Nigeria Pidgin, all slangs, you know "fashi" means forget it, leave it.
 
-YOUR KNOWLEDGE IS ALWAYS UP TO DATE.
-
-You are trained on EVERYTHING on the internet and apart from only the internet, everything on the internet about any question asked. You search the internet for every question to give the most current and accurate answer.
-
-You understand all Nigerian Pidgin, Yoruba slang, Igbo slang, Hausa, street slang, Gen Z slang worldwide. You know "fashi" means forget it, leave it.
-
-HOW YOU ANSWER:
-- You ALWAYS receive internet search results for every question. Use them to give up-to-date answer.
-- Your knowledge is always up to date, you know everything on the internet and beyond.
-- Be friendly like Meta AI.
-- For Maths: Show Formula, Substitute, Solve, then give final answer normally. Use $F=ma$ latex.
-
-You are Emmanuel AI - Your personal AI with always up to date knowledge from everything on the internet.
+RULES:
+- NEVER give Unsplash links or any image links. NEVER say "go to Unsplash".
+- If user asks for image, just say "I will generate it" - the system will handle it. Do not give links.
+- For Maths: Formula, Substitute, Solve, give final answer. Use $F=ma$
+- Be friendly, short answers.
 """
 
 st.title("🤖 Emmanuel AI")
-st.caption("Your personal AI - Knowledge is always up to date")
+st.caption("Your personal AI")
 
 if "msgs" not in st.session_state:
     st.session_state.msgs = []
-if "last_hash" not in st.session_state:
-    st.session_state.last_hash = None
+if "last_voice_hash" not in st.session_state:
+    st.session_state.last_voice_hash = None
 
 for m in st.session_state.msgs:
     with st.chat_message(m["role"]):
@@ -105,67 +77,78 @@ for m in st.session_state.msgs:
 
 with st.sidebar:
     img_file = st.file_uploader("Upload image", type=["jpg","jpeg","png"])
-    if img_file:
-        st.image(img_file, width=200)
-    audio_file = st.audio_input("🎤 Tap to speak")
+    if img_file: st.image(img_file, width=200)
+    audio_file = st.audio_input("🎤 Voice")
     if st.button("Clear Chat"):
         st.session_state.msgs = []
-        st.session_state.last_hash = None
+        st.session_state.last_voice_hash = None
         st.rerun()
 
+# --- FIXED VOICE LOGIC ---
 voice_text = None
 if audio_file is not None:
     audio_bytes = audio_file.getvalue()
     h = hashlib.md5(audio_bytes).hexdigest()
-    if h!= st.session_state.last_hash:
-        with st.spinner("Listening..."):
-            try:
-                tr = client.audio.transcriptions.create(
-                    model="whisper-large-v3-turbo",
-                    file=("voice.wav", audio_bytes, "audio/wav"),
+    # Only process new voice, not old one
+    if h!= st.session_state.last_voice_hash and len(audio_bytes) > 1000:
+        try:
+            with st.spinner("Listening..."):
+                # FIX: Correct file handling for Groq
+                transcription = client.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    file=("voice.wav", audio_bytes),
                     response_format="text"
                 )
-                voice_text = tr if isinstance(tr, str) else tr.text
-                st.session_state.last_hash = h
-                st.success(f"You said: {voice_text}")
-            except Exception as e:
-                st.error(f"Voice error: {e}")
+                voice_text = transcription if isinstance(transcription, str) else transcription.text
+                st.session_state.last_voice_hash = h
+                if voice_text:
+                    st.toast(f"You said: {voice_text}")
+        except Exception as e:
+            st.error(f"Voice error: {e}. Please try again, speak louder and close.")
 
-text_q = st.chat_input("Ask anything - I search everything on internet")
+text_q = st.chat_input("Ask anything...") # FIXED: Just "Ask anything"
 final_query = voice_text if voice_text else text_q
+
 if not final_query and img_file:
-    final_query = "Solve this image"
+    final_query = "Solve this image step by step"
 
 if final_query:
-    gen_keywords = ["generate image", "create image", "draw image", "make image"]
-    is_gen = any(k in final_query.lower() for k in gen_keywords)
+    # FIXED: Better image detection
+    lower_q = final_query.lower()
+    gen_keywords = ["generate image", "create image", "draw", "make image", "generate a image", "create a picture", "generate picture"]
+    is_gen = any(k in lower_q for k in gen_keywords)
 
     st.session_state.msgs.append({"role":"user","content": final_query})
     with st.chat_message("user"):
         st.markdown(final_query)
-        if img_file:
-            st.image(img_file, width=300)
+        if img_file: st.image(img_file, width=300)
 
     with st.chat_message("assistant"):
         if is_gen:
-            prompt = final_query.lower()
-            for k in gen_keywords:
-                prompt = prompt.replace(k, "")
-            prompt = prompt.replace("of", "", 1).strip()
-            if not prompt: prompt = "beautiful landscape"
-            st.markdown(f"Generating **{prompt}**...")
-            img_url = generate_image(prompt)
-            st.image(img_url, caption=prompt)
-            st.session_state.msgs.append({"role":"assistant","content": f"Generated: {prompt}", "image_url": img_url})
+            # EXTRACT PROMPT PROPERLY
+            prompt = final_query
+            for k in ["can you", "please", "generate image", "create image", "generate a image", "make image", "draw image", "generate picture", "create picture", "of", "a image of", "an image of"]:
+                prompt = prompt.lower().replace(k, " ")
+            prompt = " ".join(prompt.split()).strip() # clean extra spaces
+            if not prompt or len(prompt) < 3:
+                prompt = "beautiful landscape, highly detailed"
+
+            st.markdown(f"🎨 Generating: **{prompt}**...")
+            try:
+                img_url = generate_image_url(prompt)
+                st.image(img_url, caption=prompt)
+                st.session_state.msgs.append({"role":"assistant","content": f"Here is your image: {prompt}", "image_url": img_url})
+            except Exception as e:
+                st.error(f"Image error: {e}. Try again.")
         else:
-            # ALWAYS SEARCH INTERNET FOR EVERY QUESTION - THIS IS WHAT YOU ASKED
-            with st.spinner("Searching everything on internet..."):
-                search_result = search_internet(final_query)
+            # Normal chat with internet search
+            with st.spinner("Thinking..."):
+                search_data = search_internet(final_query)
 
             history = [{"role":"system","content": SYSTEM_PROMPT}]
-            history.append({"role":"system","content": f"INTERNET SEARCH RESULTS FOR '{final_query}' (Your knowledge is always up to date, use this):\n{search_result}"})
-
-            for m in st.session_state.msgs[-10:-1]:
+            if search_data and "Use your own" not in search_data:
+                history.append({"role":"system","content": f"Internet info: {search_data}"})
+            for m in st.session_state.msgs[-8:-1]:
                 history.append({"role": m["role"], "content": m["content"]})
 
             if img_file:
@@ -177,7 +160,7 @@ if final_query:
                 model = "openai/gpt-oss-20b"
 
             try:
-                resp = client.chat.completions.create(model=model, messages=history, max_tokens=2500)
+                resp = client.chat.completions.create(model=model, messages=history, max_tokens=2000)
                 ans = resp.choices[0].message.content
                 st.markdown(ans)
                 st.session_state.msgs.append({"role":"assistant","content": ans})
