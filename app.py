@@ -43,8 +43,8 @@ def generate_image(prompt):
 
 SYSTEM_PROMPT = """
 You are Emmanuel AI by Emmanuel Ebhota, created September 2026.
-You have latest knowledge up to September 2026.
-You are friendly like Meta AI.
+You have knowledge about everything and always up to date.
+You are a personal ai.
 
 RULES:
 - Solve Maths step-by-step: Formula, Substitute, Solve, Box answer. Use $F=ma$.
@@ -54,7 +54,7 @@ RULES:
 """
 
 st.title("🤖 Emmanuel AI")
-st.caption("Voice + Image + Memory - Like Meta AI")
+st.caption("Your personal ai")
 
 if "msgs" not in st.session_state:
     st.session_state.msgs = []
