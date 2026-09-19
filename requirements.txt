@@ -1,6 +1,4 @@
 streamlit
 groq
-gtts
 Pillow
-gspread
-oauth2client
+requests
