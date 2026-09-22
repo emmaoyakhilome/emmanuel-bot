@@ -210,35 +210,6 @@ if final_query:
             if "No live results" not in search_data:
                 history.append({"role": "system", "content": f"Web info: {search_data}"})
             
-            for m in st.session_state.msgs[-6:]:
-                if m["content"] != final_query:
-                    history.append({"role": m["role"], "content": m["content"]})
-
-            b64 = compress(img_file) if img_file else None
-
-            # Route 1: Multimodal Image Comprehension
-            if b64:
-                history.append({
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": final_query},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-                    ]
-                })
-                
-                ans = "I encountered an error looking at that image."
-                for vm in ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"]:
-                    try:
-                        resp = client.chat.completions.create(model=vm, messages=history, max_tokens=1500)
-                        ans = resp.choices[0].message.content
-                        break
-                    except:
-                        continue
-                
-                st.write_stream(stream_text(ans))
-                st.session_state.msgs.append({"role": "assistant", "content": ans})
-            
-            # Route 2: Fast Text Intelligence Inference
-            else:
-                history.append({"role": "user", "content": final_query})
+           
+                  
                 try:
