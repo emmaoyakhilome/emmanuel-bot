@@ -5,11 +5,12 @@ import requests
 import json
 import os
 import re
+import io
+from PIL import Image
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="centered")
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# ---------- SIMPLE DESIGN ----------
 st.markdown("""
 <style>
 .stApp { background-color: #000000; color: white; }
@@ -25,83 +26,37 @@ div[data-testid="stMarkdownContainer"] td {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- SLANG + SHORT FORM DICTIONARY - MAKE AI FAMILIAR LIKE ME ----------
+# ---------- SLANG ----------
 SLANG_MAP = {
-    # Naija / Pidgin greetings
     "hwf": "how far", "hwf na": "how far na", "hwd": "how far dey go",
-    "how far na": "how far na", "wetin dey": "what is happening", "wetin": "what",
-    "how e be": "how is it", "how e dey go": "how is it going",
-    "wey": "where", "weytin": "what", "abi": "right?",
-    "abeg": "please", "biko": "please", "ehn": "huh", "o": "",
-    "na wa": "wow / unbelievable", "na wa o": "wow",
-    "no wahala": "no problem", "wahala": "trouble / problem",
-    "japa": "travel abroad / run away", "sapa": "broke / no money",
-    "cruise": "fun / joke", "yarn": "talk / gist", "gist": "gossip / talk",
-    "gbam": "exactly / bang", "e choke": "it is amazing / too much",
-    "shey": "is it / right?", "shebi": "isn't it",
-    "oga": "boss / sir", "boss": "boss", "my guy": "my friend",
-    "chop": "eat", "waka": "walk / go", "comot": "go out",
-    "na": "", "dey": "is", "go": "will",
-    # Gen Z / Internet short forms
-    "wyd": "what are you doing", "wya": "where are you",
-    "wbu": "what about you", "wuu2": "what are you up to",
+    "wyd": "what are you doing", "wbu": "what about you", "wya": "where are you",
     "idk": "I don't know", "ikr": "I know right", "tbh": "to be honest",
     "ngl": "not gonna lie", "lol": "laughing", "lmao": "laughing hard",
-    "omg": "oh my God", "omg": "oh my God", "asap": "as soon as possible",
-    "brb": "be right back", "btw": "by the way", "fyi": "for your information",
-    "imo": "in my opinion", "imho": "in my humble opinion",
+    "omg": "oh my God", "asap": "as soon as possible", "brb": "be right back",
+    "btw": "by the way", "fyi": "for your information", "imo": "in my opinion",
     "nvm": "never mind", "ty": "thank you", "thx": "thanks",
     "pls": "please", "plz": "please", "u": "you", "ur": "your",
-    "y": "why", "bcos": "because", "cos": "because", "cuz": "because",
-    "wot": "what", "wat": "what", "wen": "when", "whr": "where",
-    "gm": "good morning", "gn": "good night", "gd": "good",
-    "fr": "for real", "fr fr": "for real for real", "on god": "I swear",
-    "bet": "okay / deal", "cap": "lie", "no cap": "no lie",
-    "slay": "you did great", "vibe": "feeling", "vibes": "feelings",
-    "sus": "suspicious", "rizz": "charm", "bussin": "very good",
-    "lit": "amazing / fun", "fire": "amazing", "goat": "greatest of all time",
-    "w": "win / good", "l": "loss / bad",
-    "fomo": "fear of missing out", "yolo": "you only live once",
-    "smh": "shaking my head", "istg": "I swear to God",
-    "ofc": "of course", "obv": "obviously", "rn": "right now",
-    "tmr": "tomorrow", "tmo": "tomorrow", "2moro": "tomorrow",
-    "2day": "today", "2nite": "tonight", "gr8": "great",
-    "luv": "love", "bae": "boyfriend / girlfriend / love",
-    "bestie": "best friend", "fam": "family / friend",
-    "bro": "brother / friend", "sis": "sister / friend",
-    "dunno": "don't know", "gonna": "going to", "wanna": "want to",
-    "gotta": "got to", "kinda": "kind of", "sorta": "sort of",
-    "yea": "yeah", "yeah": "yes", "yup": "yes", "nah": "no",
-    "ok": "okay", "kk": "okay", "k": "okay",
-    "hbd": "happy birthday", "hny": "happy new year",
-    "rip": "rest in peace", "f": "respect",
-    # School / Nigeria specific
-    "redeemer's": "Redeemer's University", "rdu": "Redeemer's University",
-    "zip": "Zip", "unilag": "University of Lagos", "oau": "Obafemi Awolowo University",
-    "ui": "University of Ibadan", "lasu": "Lagos State University",
+    "abeg": "please", "wahala": "trouble", "no wahala": "no problem",
+    "japa": "travel abroad", "sapa": "broke", "cruise": "fun",
+    "yarn": "talk", "gist": "talk", "gbam": "exactly", "e choke": "amazing",
+    "shey": "is it", "na wa": "wow", "oga": "boss", "my guy": "my friend",
+    "fr": "for real", "no cap": "no lie", "bet": "okay", "slay": "great",
+    "vibe": "feeling", "sus": "suspicious", "rizz": "charm", "lit": "amazing",
+    "fire": "amazing", "goat": "greatest of all time",
+    "gm": "good morning", "gn": "good night", "bcos": "because", "cos": "because",
+    "wot": "what", "wat": "what", "dunno": "don't know", "gonna": "going to",
 }
-
 def expand_slang(text):
     low = text.lower().strip()
-    # Direct match first - e.g. "hwf na" -> "how far na"
-    if low in SLANG_MAP:
-        return SLANG_MAP[low]
-    # Replace slang words inside sentence
+    if low in SLANG_MAP: return SLANG_MAP[low]
     words = re.findall(r"\w+|[^\w\s]", low)
-    out = []
-    for w in words:
-        if w in SLANG_MAP and SLANG_MAP[w] != "":
-            out.append(SLANG_MAP[w])
-        else:
-            out.append(w)
+    out = [SLANG_MAP.get(w, w) for w in words]
     expanded = " ".join(out)
-    expanded = re.sub(r"\s+([?.!,])", r"\1", expanded)
-    return expanded
-
+    return re.sub(r"\s+([?.!,])", r"\1", expanded)
 def is_slang_only(text):
-    return text.lower().strip() in SLANG_MAP or text.lower().strip() in ["hwf", "hwf na", "hwd", "wyd", "wbu", "how far", "wetin dey"]
+    return text.lower().strip() in SLANG_MAP
 
-# ---------- TRUSTED WEB SEARCH ----------
+# ---------- TRUSTED SEARCH ----------
 def search_web(query):
     results = []
     try:
@@ -115,8 +70,7 @@ def search_web(query):
     except Exception: pass
     try:
         wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{query}", timeout=5).json()
-        if "extract" in wiki:
-            results.append(f"- Wikipedia (Trusted): {wiki['extract']} (Source: https://en.wikipedia.org)")
+        if "extract" in wiki: results.append(f"- Wikipedia (Trusted): {wiki['extract']} (Source: https://en.wikipedia.org)")
     except Exception: pass
     try:
         from duckduckgo_search import DDGS
@@ -129,65 +83,73 @@ def search_web(query):
                 if len(results) >= 5: break
     except Exception: pass
     return "\n".join(results) if results else "No trusted internet results found."
-
 def needs_search(text):
     keywords = ["who is", "what is", "when", "where", "latest", "news", "today", "2025", "2026", "price", "how many", "current", "is it true", "fact"]
     return any(k in text.lower() for k in keywords)
 
-# ---------- SPELLING - SKIP SLANG ----------
+# ---------- TYPO - SKIP SLANG ----------
 def check_typo(text):
-    if is_slang_only(text):
-        return text, False
-    if len(text.strip()) < 4 or len(text.split()) < 2:
-        return text, False
+    if is_slang_only(text): return text, False
+    if len(text.strip()) < 4 or len(text.split()) < 2: return text, False
     try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are a spelling checker. If user text has spelling mistake, return ONLY corrected sentence. If correct, return EXACTLY same sentence. Do NOT correct slang, Pidgin, Yoruba, Igbo, Hausa, Gen Z short forms like hwf, wyd, idk, lol, tbh, ngl, abeg, wahala. Keep them as is. Do not explain."},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.0, max_tokens=150
-        )
+        resp = client.chat.completions.create(model="llama-3.3-70b-versatile",
+            messages=[{"role": "system", "content": "You are spelling checker. If text has spelling mistake, return ONLY corrected sentence. If correct, return EXACTLY same. Do NOT correct slang, Pidgin, Yoruba, Igbo, Hausa, Gen Z like hwf, wyd, abeg, wahala, lol, tbh."},
+                      {"role": "user", "content": text}], temperature=0.0, max_tokens=150)
         corrected = resp.choices[0].message.content.strip()
-        if corrected.lower() != text.lower() and len(corrected) > 0:
-            return corrected, True
+        if corrected.lower() != text.lower() and len(corrected) > 0: return corrected, True
         return text, False
-    except Exception:
-        return text, False
+    except Exception: return text, False
 
-# ---------- SAFE CHAT - FIX 400 ERROR + FALLBACK MODELS ----------
+# ---------- SAFE CHAT - NO 400 ERROR ----------
 def safe_chat(messages, max_tokens=1024):
-    # Try stable models in order, no tools, so no 400 tool error
     models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
     last_err = None
     for model in models:
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=max_tokens
-            )
+            resp = client.chat.completions.create(model=model, messages=messages, temperature=0.3, max_tokens=max_tokens)
             return resp.choices[0].message.content
-        except Exception as e:
-            last_err = e
-            continue
+        except Exception as e: last_err = e; continue
     raise last_err
 
+# ---------- PICTURE FIX - COMPRESS + CORRECT VISION MODEL ----------
+def compress_image(img_bytes, max_size=800):
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        img = img.convert("RGB")
+        if max(img.size) > max_size: img.thumbnail((max_size, max_size))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        return buf.getvalue()
+    except Exception: return img_bytes
+
 def safe_vision(content_list):
-    # FIX 404 - try working vision models in order
-    vision_models = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"]
-    last_err = None
+    vision_models = [
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "llama-3.2-11b-vision-preview",
+        "llama-3.2-90b-vision-preview",
+    ]
+    last_err = ""
     for model in vision_models:
         try:
             resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": content_list}], max_tokens=1024, temperature=0.2)
             return resp.choices[0].message.content
         except Exception as e:
-            last_err = e
-            continue
-    # If vision fails, don't show error code, return friendly description
-    return "I fit see the image but my vision dey have wahala now. Please describe wetin dey for the image, or try again."
+            last_err = str(e); continue
+    return f"Vision dey have wahala for Groq side now ({last_err[:80]}). Abeg describe wetin dey for image make I help you."
+
+# ---------- VOICE FIX - FORCE .ogg NAME + RETRY ----------
+def transcribe_voice(audio_bytes):
+    # Try 1: as .ogg (na wetin WhatsApp / Streamlit dey give)
+    # Try 2: as .wav (fallback)
+    for filename in ["voice.ogg", "voice.wav", "voice.mp3"]:
+        try:
+            trans = client.audio.transcriptions.create(file=(filename, audio_bytes), model="whisper-large-v3", response_format="text")
+            text = str(trans).strip()
+            if text: return text
+        except Exception as e:
+            last = str(e); continue
+    return None
 
 # ---------- PER-USER HISTORY ----------
 def safe_name(name): return re.sub(r"[^a-zA-Z0-9_-]", "_", name.strip().lower()) or "guest"
@@ -237,24 +199,17 @@ def get_relevant_memories(u, user_q):
     text = "\n".join([f"Past chat - User: {m['q']} | AI: {m['a'][:300]}" for _, m in top])
     return f"\n\nLEARNED FROM PAST CHATS OF THIS USER:\n{text}"
 
-SYSTEM_PROMPT = """You are Emmanuel AI. You are VERY familiar with Nigerian slang, Pidgin, Gen Z slang, and all short forms - like a real Nigerian friend.
-
-SLANG YOU MUST KNOW:
-- hwf / hwf na / hwd = How far, greet person warmly. Reply like "I dey o, hwf na? How your side?"
-- wyd = what are you doing, wbu = what about you, wya = where are you
-- idk, ikr, tbh, ngl, lol, lmao, omg, asap, brb, btw, fyi, imo, nvm
-- abeg, wahala, no wahala, japa, sapa, cruise, yarn, gist, gbam, e choke, shey, na wa, oga, my guy
-- u, ur, pls, thx, coz, bcos, wot, wat, gm, gn, fr, no cap, bet, slay, vibe, sus, rizz, lit, fire, goat
-- If user uses slang/short form, REPLY IN SAME STYLE. Don't be too formal. Be friendly like Meta AI.
-- If user types "hwf", NEVER say "I don't understand". Answer "I dey o, hwf na?"
-- If user types "wyd", answer what you are doing and ask them.
-- If user types "who is" with a name, give real facts.
+SYSTEM_PROMPT = """You are Emmanuel AI. You are VERY familiar with Nigerian slang, Pidgin, Gen Z slang, and all short forms.
+- hwf / hwf na / hwd = How far. Reply like "I dey o, hwf na?"
+- wyd = what are you doing, wbu = what about you, abeg, wahala, no wahala, japa, sapa, cruise, yarn, gist, gbam, e choke, shey, na wa, oga, my guy
+- If user uses slang, REPLY IN SAME STYLE. Don't be too formal.
+- If user types "hwf", NEVER say "I don't understand".
 - For images, vision can be WRONG. Check with knowledge + web search. If fan-art, say so.
-- For anime: only canon facts. Never invent.
-- If unsure, say "I'm not fully sure" in user's language, give true facts.
-- Reply in SAME language user used - English, Pidgin, Yoruba, Igbo, Hausa, French, Spanish, any language.
+- For anime: only canon facts. Never invent. If image is Meliodas, say Meliodas from Seven Deadly Sins.
+- If unsure, say "I'm not fully sure" in user's language.
+- Reply in SAME language user used.
 - For tables, keep SHORT - max 3 columns, fit phone.
-- NEVER show error codes. NEVER say "Error code 400 / 404". If something fails, say friendly "Network wahala small, try again".
+- NEVER show error codes. If fail, say friendly "Network wahala small, try again".
 """
 
 # ---------- SESSION ----------
@@ -305,36 +260,43 @@ st.divider()
 for m in st.session_state.messages:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
+# ---------- PICTURE UPLOAD - FIXED TO STAY ----------
 uploaded_files = st.file_uploader("📷 Upload image (max 3)", type=["jpg", "png", "jpeg"], accept_multiple_files=True, key="uploader")
 if uploaded_files:
     new_images = []
     for f in uploaded_files[:3]:
         new_images.append({"name": f.name, "bytes": f.getvalue(), "type": f.type})
-    if new_images != st.session_state.saved_images: st.session_state.saved_images = new_images
-    for img in st.session_state.saved_images: st.image(img["bytes"], width=200, caption="Ready to send")
+    # Only update if different, so e no disappear
+    if new_images != st.session_state.saved_images:
+        st.session_state.saved_images = new_images
 if st.session_state.saved_images:
+    for img in st.session_state.saved_images:
+        st.image(img["bytes"], width=200, caption=f"Ready to send: {img['name']}")
     if st.button("❌ Clear images"):
         st.session_state.saved_images = []; st.rerun()
 
+# ---------- VOICE - FIXED ----------
 audio_file = st.audio_input("🎤 Speak - any language")
 user_text = None
+voice_text = None
 if audio_file:
     audio_id = f"{audio_file.name}-{audio_file.size}"
     if audio_id != st.session_state.last_audio_id:
         st.session_state.last_audio_id = audio_id
         with st.spinner("Listening..."):
-            try:
-                trans = client.audio.transcriptions.create(file=(audio_file.name, audio_file.getvalue()), model="whisper-large-v3", response_format="text")
-                user_text = str(trans).strip()
-                st.success(f"You said: {user_text}")
-            except Exception:
-                st.error("Voice wahala small, abeg try again - speak clear and close to phone.")
+            audio_bytes = audio_file.getvalue()
+            voice_text = transcribe_voice(audio_bytes)
+            if voice_text:
+                st.success(f"You said: {voice_text}")
+                user_text = voice_text
+            else:
+                st.error("Voice wahala small, abeg try again - speak clear, close to phone, and make sure sound no too short (speak 2 seconds).")
 
 if not user_text:
     txt = st.chat_input("Ask anything - slang, pidgin, any language...")
     if txt: user_text = txt
 
-# TYPO FLOW - skip if slang
+# TYPO FLOW
 if st.session_state.pending_text:
     st.warning(f"🤔 Did you mean: **\"{st.session_state.pending_corrected}\"** ?")
     cc1, cc2 = st.columns(2)
@@ -356,8 +318,8 @@ if user_text and not st.session_state.pending_text:
             st.session_state.pending_corrected = corrected
             st.rerun()
 
+# ---------- ANSWER ----------
 if user_text:
-    # Expand slang for AI to understand better, but keep original for display
     expanded = expand_slang(user_text)
     st.session_state.messages.append({"role": "user", "content": user_text})
     save_user_chats(username, st.session_state.messages)
@@ -367,17 +329,16 @@ if user_text:
             for img in st.session_state.saved_images: st.image(img["bytes"], width=250)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching trusted sources + remembering you..."):
+        with st.spinner("Looking at image / listening + searching..."):
             try:
                 lang_instruction = f"\nUser language preference: {st.session_state.chosen_lang}." if st.session_state.chosen_lang != "Auto - Detect my language" else ""
-                # Use expanded version for understanding, original for style
                 final_question = f"User said (original): {user_text}\nUser said (expanded slang): {expanded}" + lang_instruction
                 if st.session_state.saved_images:
-                    content_list = [{"type": "text", "text": "Describe what you see. Read all visible text, just describe."}]
+                    content_list = [{"type": "text", "text": f"User asked: {user_text}. Describe this image in detail. Who is this character? What anime / show? What is he doing? Read all text in image."}]
                     for img in st.session_state.saved_images[:3]:
-                        b64 = base64.b64encode(img["bytes"]).decode()
-                        mime = img["type"] if img["type"] else "image/jpeg"
-                        content_list.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                        small_bytes = compress_image(img["bytes"])
+                        b64 = base64.b64encode(small_bytes).decode()
+                        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                     image_desc = safe_vision(content_list)
                     final_question = f"User question: {user_text} (expanded: {expanded})\nVision saw: {image_desc}" + lang_instruction
                 web_info = ""
@@ -400,5 +361,4 @@ if user_text:
                     if st.button("👎 Wrong - Teach me", key=f"down_{len(st.session_state.messages)}"):
                         st.info("Tell me the correct answer for this in next chat, I go learn am.")
             except Exception:
-                # NEVER show raw error code to user
                 st.error("Network wahala small, abeg try again. If e continue, wait 1 min and press Send again.")
