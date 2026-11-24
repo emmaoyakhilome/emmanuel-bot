@@ -1,215 +1,196 @@
 import streamlit as st
 from groq import Groq
 import base64
-from PIL import Image, ExifTags
-import io
-import hashlib
-import urllib.parse
 import requests
-import random
-import time
+import json
+import os
+import re
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="centered")
-
-if "GROQ_API_KEY" not in st.secrets:
-    st.error("Add GROQ_API_KEY in Streamlit > Settings > Secrets")
-    st.stop()
-
-# Initialize API Client
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-def search_internet(query):
+# ---------- 1. WEB SEARCH (Browse Internet) ----------
+def search_web(query):
+    """Search internet for fresh facts. No API key needed."""
+    results = []
+    # Try DuckDuckGo
     try:
-        url = f"https://duckduckgo.com{urllib.parse.quote(query)}&format=json&pretty=1"
-        r = requests.get(url, timeout=5)
-        data = r.json()
-        result = data.get("AbstractText", "")
-        return result[:1500] if result else "No live results"
-    except:
-        return "No live results"
-
-def compress(file):
-    try:
-        file.seek(0)
-        img = Image.open(file)
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=5):
+                results.append(f"- {r.get('title','')}: {r.get('body','')} ({r.get('href','')})")
+    except Exception:
+        pass
+    # Fallback: Wikipedia
+    if not results:
         try:
-            for orientation in ExifTags.TAGS.keys():
-                if ExifTags.TAGS[orientation] == 'Orientation':
-                    break
-            exif = img._getexif()
-            if exif:
-                orient = exif.get(orientation)
-                if orient == 3: img = img.rotate(180, expand=True)
-                elif orient == 6: img = img.rotate(270, expand=True)
-                elif orient == 8: img = img.rotate(90, expand=True)
-        except: 
+            wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{query}", timeout=5).json()
+            if "extract" in wiki:
+                results.append(f"- Wikipedia: {wiki['extract']}")
+        except Exception:
             pass
-        img.thumbnail((1024, 1024))
-        if img.mode != "RGB": 
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=70)
-        return base64.b64encode(buf.getvalue()).decode()
-    except: 
-        return None
+    return "\n".join(results) if results else "No internet results found."
 
-def generate_image_url(prompt, fallback_model=False):
-    encoded = urllib.parse.quote(prompt.strip()[:400])
-    seed = random.randint(1, 9999999)
-    # Uses ultra-premium Flux by default, switches to Stable Diffusion 3 if fallback triggered
-    model_choice = "sd3" if fallback_model else "flux"
-    return f"https://pollinations.ai{encoded}?width=1024&height=1024&nologo=true&model={model_choice}&seed={seed}&enhance=true"
+def needs_search(text):
+    keywords = ["who is", "what is", "when", "where", "latest", "news", "today", "2025", "2026", "price", "how many", "current", "is it true", "fact"]
+    text_low = text.lower()
+    return any(k in text_low for k in keywords)
 
-# Helper function for true typewriter streaming effect
-def stream_text(text):
-    for word in text.split(" "):
-        yield word + " "
-        time.sleep(0.01)
+# ---------- 2. MEMORY / TRAINING (It learns from chats) ----------
+MEMORY_FILE = "memory.jsonl"
 
-SYSTEM_PROMPT = "You are Emmanuel AI by Emmanuel Ebhota from Abuja. Never give Unsplash links. Be friendly, short, understand Nigeria pidgin."
+def load_memory():
+    memories = []
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        memories.append(json.loads(line))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    return memories[-100:]  # last 100 chats only
+
+def save_to_memory(user_q, ai_a, rating=""):
+    data = {"q": user_q, "a": ai_a, "rating": rating}
+    try:
+        with open(MEMORY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(data) + "\n")
+    except Exception:
+        pass
+    # Also save to session so it works on Streamlit Cloud (no permanent file)
+    if "learned" not in st.session_state:
+        st.session_state.learned = []
+    st.session_state.learned.append(data)
+
+def get_relevant_memories(user_q):
+    all_mem = load_memory()
+    if "learned" in st.session_state:
+        all_mem = all_mem + st.session_state.learned
+    if not all_mem:
+        return ""
+    words = set(re.findall(r"\w+", user_q.lower()))
+    scored = []
+    for m in all_mem:
+        m_words = set(re.findall(r"\w+", m.get("q","").lower()))
+        overlap = len(words & m_words)
+        if overlap >= 1:
+            scored.append((overlap, m))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:3]
+    if not top:
+        return ""
+    text = "\n".join([f"Past chat - User: {m['q']} | AI: {m['a'][:300]}" for _, m in top])
+    return f"\n\nLEARNED FROM PAST CHATS (use this to improve):\n{text}"
+
+SYSTEM_PROMPT = """You are Emmanuel AI built by Emmanuel Ebhota from Abuja, Nigeria.
+You learn from past chats. If LEARNED FROM PAST CHATS is provided, use it.
+You also get WEB SEARCH RESULTS when available. Use them for fresh facts, don't use old knowledge.
+Rules:
+1. For images, vision description can be WRONG. Check with your own knowledge + web search.
+2. If image is fan-art / edited, say so then give correct facts.
+3. For anime: only canon facts. Never invent.
+4. If unsure, say "I'm not fully sure" and give true facts. Never invent.
+5. Reply in same language user used.
+"""
 
 st.title("🤖 Emmanuel AI")
-st.caption("Your multi-talented AI assistant built by Emmanuel Ebhota")
+st.caption("Built by Emmanuel Ebhota | Abuja, Nigeria | Learns from chats + Browses internet")
 
-# Initialize Session States
-if "msgs" not in st.session_state: 
-    st.session_state.msgs = []
-if "last_voice_hash" not in st.session_state: 
-    st.session_state.last_voice_hash = None
-if "last_image_prompt" not in st.session_state: 
-    st.session_state.last_image_prompt = "beautiful landscape, highly detailed"
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "learned" not in st.session_state:
+    st.session_state.learned = []
 
-# Render Chat History cleanly
-for idx, m in enumerate(st.session_state.msgs):
+for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
-        if "image_url" in m: 
-            st.image(m["image_url"], caption=m.get("prompt_caption", ""))
-            # Download tool for historic images using unique button IDs
-            try:
-                img_data = requests.get(m["image_url"]).content
-                st.download_button(label="📥 Download This Image", data=img_data, file_name=f"emmanuel_ai_{idx}.jpg", mime="image/jpeg", key=f"dl_{idx}")
-            except:
-                pass
-        if "uploaded_img" in m and m["uploaded_img"]:
-            st.image(m["uploaded_img"], width=250)
 
-# Sidebar controls
-with st.sidebar:
-    st.markdown("### 🛠️ Multimedia Tools")
-    img_file = st.file_uploader("Upload image for Emmanuel to look at", type=["jpg","jpeg","png"])
-    if img_file: 
-        st.image(img_file, width=200)
-    
-    try: 
-        audio_file = st.audio_input("🎤 Speak to Emmanuel")
-    except: 
-        audio_file = None
-        
-    st.markdown("---")
-    if st.button("🗑️ Clear Chat Records", use_container_width=True):
-        st.session_state.msgs = []
-        st.session_state.last_image_prompt = "beautiful landscape, highly detailed"
-        st.session_state.last_voice_hash = None
-        st.rerun()
+uploaded_files = st.file_uploader("📷 Upload image (max 3)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+audio_file = st.audio_input("🎤 Speak")
 
-# Process voice transcription pipeline
-voice_text = None
+user_text = None
 if audio_file:
-    b = audio_file.getvalue()
-    if len(b) > 1000:
-        h = hashlib.md5(b).hexdigest()
-        if h != st.session_state.last_voice_hash:
+    try:
+        trans = client.audio.transcriptions.create(
+            file=(audio_file.name, audio_file.getvalue()),
+            model="whisper-large-v3",
+            response_format="text"
+        )
+        user_text = trans
+        st.success(f"You said: {user_text}")
+    except Exception as e:
+        st.error(f"Voice error: {e}")
+
+if not user_text:
+    txt = st.chat_input("Ask anything...")
+    if txt:
+        user_text = txt
+
+if user_text:
+    st.session_state.messages.append({"role": "user", "content": user_text})
+    with st.chat_message("user"):
+        st.markdown(user_text)
+        if uploaded_files:
+            for f in uploaded_files[:3]:
+                st.image(f, width=250)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Searching internet + remembering past chats..."):
             try:
-                tr = client.audio.transcriptions.create(model="whisper-large-v3", file=("voice.wav", b), response_format="text")
-                voice_text = tr if isinstance(tr, str) else tr.text
-                st.session_state.last_voice_hash = h
-                st.toast(f"🗣️ Transcribed: {voice_text}")
-            except Exception as e: 
-                st.error(f"Voice engine warning: {e}")
+                final_question = user_text
 
-text_q = st.chat_input("Ask me anything or ask me to draw something...")
-final_query = voice_text if voice_text else text_q
+                # Image vision
+                if uploaded_files:
+                    content_list = [{"type": "text", "text": "Describe what you see. Read all visible text, just describe."}]
+                    for f in uploaded_files[:3]:
+                        b64 = base64.b64encode(f.getvalue()).decode()
+                        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                    vision_resp = client.chat.completions.create(
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                        messages=[{"role": "user", "content": content_list}],
+                        max_tokens=1024
+                    )
+                    image_desc = vision_resp.choices[0].message.content
+                    final_question = f"User question: {user_text}\nVision saw: {image_desc}"
 
-if final_query:
-    lower = final_query.lower().strip()
+                # Web search
+                web_info = ""
+                if needs_search(user_text) or uploaded_files:
+                    web_info = search_web(user_text)
+                    final_question += f"\n\nWEB SEARCH RESULTS:\n{web_info}"
 
-    gen_keywords = ["generate image","create image","generate picture","create picture","draw","make image","generate","create an image","create a image"]
-    regen_keywords = ["i dont like", "don't like", "dont like", "oya do", "do it", "another", "different", "change", "do am", "another one", "not this", "other", "new one", "fashi", "oya"]
+                # Memory / Training
+                mem_info = get_relevant_memories(user_text)
+                if mem_info:
+                    final_question += mem_info
 
-    is_gen = any(k in lower for k in gen_keywords)
-    is_regen = any(k in lower for k in regen_keywords)
+                resp = client.chat.completions.create(
+                    model="openai/gpt-oss-20b",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": final_question}
+                    ],
+                    temperature=0.2
+                )
+                ans = resp.choices[0].message.content
+                st.markdown(ans)
+                st.session_state.messages.append({"role": "assistant", "content": ans})
 
-    if is_regen and not is_gen:
-        if st.session_state.last_image_prompt:
-            is_gen = True
-            final_query = st.session_state.last_image_prompt
+                # SAVE = TRAINING - every chat trains it
+                save_to_memory(user_text, ans)
 
-    # CASE A: Upgraded Image Generation & Download Sequence
-    if is_gen:
-        prompt = final_query
-        if is_regen:
-            prompt = st.session_state.last_image_prompt
-        else:
-            temp = lower
-            for k in ["can you","please","generate image","create image","make image","generate picture","create picture","generate an image","create an image","generate a image","create a image","generate","create","draw","an image of","a image of","image of","picture of","of"]:
-                temp = temp.replace(k, " ")
-            temp = " ".join(temp.split()).strip()
-            prompt = temp if len(temp) >= 3 else st.session_state.last_image_prompt
+                # Feedback buttons - this is how it learns what is correct
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("👍 Correct", key=f"up_{len(st.session_state.messages)}"):
+                        save_to_memory(user_text, ans, rating="good")
+                        st.success("Noted! I go remember this as correct.")
+                with col2:
+                    if st.button("👎 Wrong - Teach me", key=f"down_{len(st.session_state.messages)}"):
+                        st.info("Tell me the correct answer for this in next chat, I go learn am.")
 
-        st.session_state.last_image_prompt = prompt
-        st.session_state.msgs.append({"role": "user", "content": final_query})
-
-        with st.chat_message("user"):
-            st.markdown(final_query)
-
-        with st.chat_message("assistant"):
-            st.markdown(f"🎨 Drawing your vision: **{prompt}**...")
-            
-            # Primary Flux Attempt with automatic SD3 Fallback Core
-            img_url = generate_image_url(prompt, fallback_model=False)
-            try:
-                response = requests.get(img_url, timeout=10)
-                if response.status_code != 200:
-                    raise Exception("Primary pipeline busy")
-                img_data = response.content
-            except:
-                # Hot swap to Stable Diffusion 3 backup model instantly
-                img_url = generate_image_url(prompt, fallback_model=True)
-                img_data = requests.get(img_url).content
-                
-            st.image(img_url, caption=prompt)
-            
-            # Interactive direct local download utility
-            st.download_button(label="📥 Download This Image", data=img_data, file_name="emmanuel_ai_art.jpg", mime="image/jpeg", key="dl_current")
-            
-            st.session_state.msgs.append({
-                "role": "assistant", 
-                "content": "Look at what I made for you! ✨", 
-                "image_url": img_url,
-                "prompt_caption": prompt
-            })
-
-    # CASE B: Real-Time Multimodal Text / Vision Engine Loop
-    else:
-        current_msg = {"role": "user", "content": final_query}
-        if img_file:
-            current_msg["uploaded_img"] = img_file
-        st.session_state.msgs.append(current_msg)
-        
-        with st.chat_message("user"):
-            st.markdown(final_query)
-            if img_file: 
-                st.image(img_file, width=250)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Searching and thinking..."):
-                search_data = search_internet(final_query)
-
-            history = [{"role": "system", "content": SYSTEM_PROMPT}]
-            if "No live results" not in search_data:
-                history.append({"role": "system", "content": f"Web info: {search_data}"})
-            
-           
-                  
-                try:
+            except Exception as e:
+                st.error(f"Error: {e}")
