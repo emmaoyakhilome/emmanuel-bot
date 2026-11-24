@@ -100,7 +100,7 @@ def check_typo(text):
         return text, False
     except Exception: return text, False
 
-# ---------- SAFE CHAT - NO 400 ERROR ----------
+# ---------- SAFE CHAT ----------
 def safe_chat(messages, max_tokens=1024):
     models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
     last_err = None
@@ -111,7 +111,7 @@ def safe_chat(messages, max_tokens=1024):
         except Exception as e: last_err = e; continue
     raise last_err
 
-# ---------- PICTURE FIX - COMPRESS + CORRECT VISION MODEL ----------
+# ---------- PICTURE - COMPRESS + GEMINI FIRST ----------
 def compress_image(img_bytes, max_size=800):
     try:
         img = Image.open(io.BytesIO(img_bytes))
@@ -122,33 +122,39 @@ def compress_image(img_bytes, max_size=800):
         return buf.getvalue()
     except Exception: return img_bytes
 
-def safe_vision(content_list):
-    vision_models = [
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        "llama-3.2-11b-vision-preview",
-        "llama-3.2-90b-vision-preview",
-    ]
-    last_err = ""
+def safe_vision(content_list, image_bytes_list):
+    # 1. GEMINI - free, e really dey see picture
+    try:
+        gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+        if gemini_key and image_bytes_list:
+            img_b64 = base64.b64encode(image_bytes_list[0]).decode()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            payload = {"contents": [{"parts": [
+                {"text": "Describe this image in detail. Who is this character? What anime / show? What is he doing? Colours, pose, background?"},
+                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
+            ]}]}
+            r = requests.post(url, json=payload, timeout=20)
+            data = r.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        print(f"Gemini failed: {e}")
+    # 2. GROQ fallback
+    vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-11b-vision-preview"]
     for model in vision_models:
         try:
             resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": content_list}], max_tokens=1024, temperature=0.2)
             return resp.choices[0].message.content
-        except Exception as e:
-            last_err = str(e); continue
-    return f"Vision dey have wahala for Groq side now ({last_err[:80]}). Abeg describe wetin dey for image make I help you."
+        except Exception: continue
+    return "I no fit see image well for now. Abeg describe am."
 
-# ---------- VOICE FIX - FORCE .ogg NAME + RETRY ----------
+# ---------- VOICE ----------
 def transcribe_voice(audio_bytes):
-    # Try 1: as .ogg (na wetin WhatsApp / Streamlit dey give)
-    # Try 2: as .wav (fallback)
     for filename in ["voice.ogg", "voice.wav", "voice.mp3"]:
         try:
             trans = client.audio.transcriptions.create(file=(filename, audio_bytes), model="whisper-large-v3", response_format="text")
             text = str(trans).strip()
             if text: return text
-        except Exception as e:
-            last = str(e); continue
+        except Exception: continue
     return None
 
 # ---------- PER-USER HISTORY ----------
@@ -204,8 +210,10 @@ SYSTEM_PROMPT = """You are Emmanuel AI. You are VERY familiar with Nigerian slan
 - wyd = what are you doing, wbu = what about you, abeg, wahala, no wahala, japa, sapa, cruise, yarn, gist, gbam, e choke, shey, na wa, oga, my guy
 - If user uses slang, REPLY IN SAME STYLE. Don't be too formal.
 - If user types "hwf", NEVER say "I don't understand".
+- IMPORTANT: NEVER repeat the same greeting twice in one chat. If you already greeted user, continue the conversation. If user replies "I dey" after your greeting, do NOT say "hwf na" again. Ask the next thing.
+- Always use the chat history. Don't start fresh every time. Remember what user already told you.
 - For images, vision can be WRONG. Check with knowledge + web search. If fan-art, say so.
-- For anime: only canon facts. Never invent. If image is Meliodas, say Meliodas from Seven Deadly Sins.
+- For anime: only canon facts. Never invent. If image is Meliodas, say Meliodas from Seven Deadly Sins. If Vegeta, say Vegeta from Dragon Ball.
 - If unsure, say "I'm not fully sure" in user's language.
 - Reply in SAME language user used.
 - For tables, keep SHORT - max 3 columns, fit phone.
@@ -260,13 +268,12 @@ st.divider()
 for m in st.session_state.messages:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
-# ---------- PICTURE UPLOAD - FIXED TO STAY ----------
+# ---------- PICTURE UPLOAD ----------
 uploaded_files = st.file_uploader("📷 Upload image (max 3)", type=["jpg", "png", "jpeg"], accept_multiple_files=True, key="uploader")
 if uploaded_files:
     new_images = []
     for f in uploaded_files[:3]:
         new_images.append({"name": f.name, "bytes": f.getvalue(), "type": f.type})
-    # Only update if different, so e no disappear
     if new_images != st.session_state.saved_images:
         st.session_state.saved_images = new_images
 if st.session_state.saved_images:
@@ -275,7 +282,7 @@ if st.session_state.saved_images:
     if st.button("❌ Clear images"):
         st.session_state.saved_images = []; st.rerun()
 
-# ---------- VOICE - FIXED ----------
+# ---------- VOICE ----------
 audio_file = st.audio_input("🎤 Speak - any language")
 user_text = None
 voice_text = None
@@ -318,7 +325,7 @@ if user_text and not st.session_state.pending_text:
             st.session_state.pending_corrected = corrected
             st.rerun()
 
-# ---------- ANSWER ----------
+# ---------- ANSWER - REMEMBER EVERYTHING ----------
 if user_text:
     expanded = expand_slang(user_text)
     st.session_state.messages.append({"role": "user", "content": user_text})
@@ -335,11 +342,13 @@ if user_text:
                 final_question = f"User said (original): {user_text}\nUser said (expanded slang): {expanded}" + lang_instruction
                 if st.session_state.saved_images:
                     content_list = [{"type": "text", "text": f"User asked: {user_text}. Describe this image in detail. Who is this character? What anime / show? What is he doing? Read all text in image."}]
+                    img_bytes_list = []
                     for img in st.session_state.saved_images[:3]:
                         small_bytes = compress_image(img["bytes"])
+                        img_bytes_list.append(small_bytes)
                         b64 = base64.b64encode(small_bytes).decode()
                         content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-                    image_desc = safe_vision(content_list)
+                    image_desc = safe_vision(content_list, img_bytes_list)
                     final_question = f"User question: {user_text} (expanded: {expanded})\nVision saw: {image_desc}" + lang_instruction
                 web_info = ""
                 if needs_search(expanded) or st.session_state.saved_images:
@@ -347,7 +356,10 @@ if user_text:
                     final_question += f"\n\nTRUSTED WEB SEARCH RESULTS:\n{web_info}"
                 mem_info = get_relevant_memories(username, expanded)
                 if mem_info: final_question += mem_info
-                ans = safe_chat([{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": final_question}])
+                # REMEMBER EVERYTHING - send last 12 chats so e no repeat
+                history = [{"role": m["role"], "content": m["content"][:600]} for m in st.session_state.messages[-13:-1]]
+                chat_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": final_question}]
+                ans = safe_chat(chat_messages)
                 st.markdown(ans)
                 st.session_state.messages.append({"role": "assistant", "content": ans})
                 save_user_chats(username, st.session_state.messages)
