@@ -25,7 +25,7 @@ GROQ_VISION_MODELS = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
 ]
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 WHISPER_MODEL = "whisper-large-v3-turbo"  # use "whisper-large-v3" for max accuracy
 
 AUTO = "Auto - Detect my language"
