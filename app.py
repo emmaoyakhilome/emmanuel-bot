@@ -1,22 +1,64 @@
-import streamlit as st
-from groq import Groq
+import asyncio
 import base64
-import requests
+import hashlib
+import hmac
+import io
 import json
 import os
 import re
-import io
-from PIL import Image
+import secrets
+from datetime import datetime
+from urllib.parse import urlparse
+
+import requests
+import streamlit as st
+from groq import Groq
+from PIL import Image, ImageOps
 
 st.set_page_config(page_title="Emmanuel AI", page_icon="🤖", layout="centered")
+
+# =====================================================================
+# CONFIG  (model names change often - check Groq / Google model lists)
+# =====================================================================
+CHAT_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
+GROQ_VISION_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+]
+GEMINI_MODEL = "gemini-2.5-flash"
+WHISPER_MODEL = "whisper-large-v3-turbo"  # use "whisper-large-v3" for max accuracy
+
+AUTO = "Auto - Detect my language"
+# language -> text-to-speech voice (edge-tts)
+LANGUAGES = {
+    AUTO: "en-NG-EzinneNeural",
+    "English": "en-NG-EzinneNeural",
+    "Pidgin": "en-NG-AbeoNeural",
+    "Yoruba": "en-NG-EzinneNeural",
+    "Igbo": "en-NG-EzinneNeural",
+    "Hausa": "en-NG-EzinneNeural",
+    "French": "fr-FR-DeniseNeural",
+    "Spanish": "es-ES-ElviraNeural",
+    "Arabic": "ar-SA-ZariyahNeural",
+    "Portuguese": "pt-BR-FranciscaNeural",
+    "German": "de-DE-KatjaNeural",
+    "Chinese": "zh-CN-XiaoxiaoNeural",
+}
+
+DATA_DIR = "data"  # add "data/" to .gitignore - it holds private chats
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+FRIENDLY_ERROR = "Network wahala small 😅 - abeg try again. If e continue, wait small and send again."
+DEBUG = False  # switched on from the sidebar
+
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.markdown("""
 <style>
 .stApp { background-color: #000000; color: white; }
 div[data-testid="stMarkdownContainer"] table {
-    display: block; width: 100% !important;
-    overflow-x: auto; white-space: normal !important;
+    display: block; width: 100% !important; overflow-x: auto; white-space: normal !important;
 }
 div[data-testid="stMarkdownContainer"] th,
 div[data-testid="stMarkdownContainer"] td {
@@ -26,351 +68,478 @@ div[data-testid="stMarkdownContainer"] td {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- SLANG ----------
-SLANG_MAP = {
-    "hwf": "how far", "hwf na": "how far na", "hwd": "how far dey go",
-    "wyd": "what are you doing", "wbu": "what about you", "wya": "where are you",
-    "idk": "I don't know", "ikr": "I know right", "tbh": "to be honest",
-    "ngl": "not gonna lie", "lol": "laughing", "lmao": "laughing hard",
-    "omg": "oh my God", "asap": "as soon as possible", "brb": "be right back",
-    "btw": "by the way", "fyi": "for your information", "imo": "in my opinion",
-    "nvm": "never mind", "ty": "thank you", "thx": "thanks",
-    "pls": "please", "plz": "please", "u": "you", "ur": "your",
-    "abeg": "please", "wahala": "trouble", "no wahala": "no problem",
-    "japa": "travel abroad", "sapa": "broke", "cruise": "fun",
-    "yarn": "talk", "gist": "talk", "gbam": "exactly", "e choke": "amazing",
-    "shey": "is it", "na wa": "wow", "oga": "boss", "my guy": "my friend",
-    "fr": "for real", "no cap": "no lie", "bet": "okay", "slay": "great",
-    "vibe": "feeling", "sus": "suspicious", "rizz": "charm", "lit": "amazing",
-    "fire": "amazing", "goat": "greatest of all time",
-    "gm": "good morning", "gn": "good night", "bcos": "because", "cos": "because",
-    "wot": "what", "wat": "what", "dunno": "don't know", "gonna": "going to",
-}
-def expand_slang(text):
-    low = text.lower().strip()
-    if low in SLANG_MAP: return SLANG_MAP[low]
-    words = re.findall(r"\w+|[^\w\s]", low)
-    out = [SLANG_MAP.get(w, w) for w in words]
-    expanded = " ".join(out)
-    return re.sub(r"\s+([?.!,])", r"\1", expanded)
-def is_slang_only(text):
-    return text.lower().strip() in SLANG_MAP
+SYSTEM_PROMPT = """You are Emmanuel AI, a friendly and smart assistant who is very familiar with Nigerian Pidgin, Nigerian English, Yoruba, Igbo, Hausa and Gen Z slang.
+- Slang you know: hwf = how far, wyd = what are you doing, wbu = what about you, abeg = please, wahala = trouble, japa = relocate abroad, sapa = being broke, gist/yarn = chat, gbam = exactly, e choke = amazing, shey = is it, na wa = wow, oga = boss, tbh, ngl, fr, no cap, rizz, sus.
+- Reply in the SAME language and style the user uses. If they use Pidgin or slang, answer casually in the same way. Don't be stiff.
+- Never say you don't understand common slang like "hwf".
+- Never repeat a greeting you already gave. If the user answers your greeting, move the conversation forward.
+- Use the chat history. Don't start fresh every time.
+- Images: describe what you actually see and read any text in it. Only name a character, show or product if you are confident, and say if it might be fan-art. Never identify real people from their faces.
+- For anime, games and shows, stick to canon facts. Never invent.
+- If web search results are provided, use them for current facts and mention the source name. If unsure, say "I'm not fully sure" in the user's language.
+- Keep tables short (max 3 columns) so they fit a phone.
+- Never show error codes or technical errors to the user."""
 
-# ---------- TRUSTED SEARCH ----------
+
+def report(msg, err):
+    """Log errors to the console; show them in the sidebar when Debug is on."""
+    print(f"{msg}: {err}")
+    if DEBUG:
+        st.sidebar.error(f"{msg}: {err}")
+
+
+# =====================================================================
+# STORAGE  (local JSON files - these reset on Streamlit Cloud restarts.
+# For real persistence, swap these helpers for Supabase / Firebase.)
+# =====================================================================
+def safe_name(name):
+    return re.sub(r"[^a-z0-9_-]", "_", name.strip().lower()) or "guest"
+
+
+def user_path(kind, user, ext):
+    return os.path.join(DATA_DIR, f"{kind}_{safe_name(user)}.{ext}")
+
+
+def read_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def write_json(path, obj):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+    except Exception as e:
+        report("write_json", e)
+
+
+def hash_pin(pin, salt_hex):
+    return hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt_hex), 100_000).hex()
+
+
+def login(user, pin):
+    """New name -> creates the account. Existing name -> PIN must match."""
+    users = read_json(USERS_FILE, {})
+    key = safe_name(user)
+    if key in users:
+        ok = hmac.compare_digest(users[key]["hash"], hash_pin(pin, users[key]["salt"]))
+        return ok, "" if ok else "Wrong PIN for this name."
+    salt = secrets.token_hex(16)
+    users[key] = {"salt": salt, "hash": hash_pin(pin, salt)}
+    write_json(USERS_FILE, users)
+    return True, ""
+
+
+def save_chats(user, messages):
+    write_json(user_path("chats", user, "json"), messages[-200:])
+
+
+# =====================================================================
+# MEMORY  (only answers the user approved or corrected are remembered)
+# =====================================================================
+STOP = set("the an is are was were to of and or in on at for with what who how why when where "
+           "does did you your me my it this that can be have has not yes".split())
+
+
+def keywords(text):
+    return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 2 and w not in STOP}
+
+
+def save_memory(user, q, a, rating):
+    try:
+        with open(user_path("memory", user, "jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"q": q, "a": a, "rating": rating}) + "\n")
+    except Exception as e:
+        report("save_memory", e)
+
+
+def relevant_memories(user, question):
+    kw = keywords(question)
+    path = user_path("memory", user, "jsonl")
+    if not kw or not os.path.exists(path):
+        return ""
+    need = min(2, len(kw))
+    scored = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                m = json.loads(line)
+            except Exception:
+                continue
+            overlap = len(kw & keywords(m.get("q", "")))
+            if overlap >= need:
+                scored.append((overlap, m))
+    scored.sort(key=lambda x: -x[0])
+    lines = []
+    for _, m in scored[:3]:
+        label = "Correct answer" if m["rating"] == "corrected" else "Approved answer"
+        lines.append(f"- User asked: {m['q'][:200]} | {label}: {m['a'][:300]}")
+    return "\n".join(lines)
+
+
+# =====================================================================
+# WEB SEARCH
+# =====================================================================
+TRUSTED = ("wikipedia.org", "bbc.com", "reuters.com", "apnews.com", "britannica.com",
+           "nasa.gov", "who.int", "nytimes.com", "cnn.com", "aljazeera.com")
+SEARCH_RE = re.compile(
+    r"\b(who is|who won|what is|when did|when is|latest|news|today|tonight|yesterday|"
+    r"price|how many|current|currently|is it true|score|weather|20\d\d)\b", re.I)
+
+
+def needs_search(text):
+    return bool(SEARCH_RE.search(text))
+
+
+def is_trusted(url):
+    host = urlparse(url).hostname or ""
+    if host.endswith(".gov") or host.endswith(".edu") or ".gov." in host or ".edu." in host:
+        return True
+    return any(host == d or host.endswith("." + d) for d in TRUSTED)
+
+
 def search_web(query):
     results = []
+    # 1. Google Custom Search (optional)
     try:
-        google_key = st.secrets.get("GOOGLE_API_KEY", "")
-        google_cx = st.secrets.get("GOOGLE_CX", "")
-        if google_key and google_cx:
-            g = requests.get("https://www.googleapis.com/customsearch/v1", params={"key": google_key, "cx": google_cx, "q": query, "num": 5}, timeout=8).json()
-            for item in g.get("items", []):
-                results.append(f"- {item.get('title','')}: {item.get('snippet','')} (Source: {item.get('link','')} - GOOGLE)")
-            if results: return "\n".join(results)
-    except Exception: pass
-    try:
-        wiki = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{query}", timeout=5).json()
-        if "extract" in wiki: results.append(f"- Wikipedia (Trusted): {wiki['extract']} (Source: https://en.wikipedia.org)")
-    except Exception: pass
-    try:
-        from duckduckgo_search import DDGS
-        trusted = ["wikipedia.org", "bbc.com", "reuters.com", "apnews.com", "britannica.com", "nasa.gov", "who.int", "gov", "edu", "nytimes.com", "cnn.com", "aljazeera.com"]
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=10):
-                link = r.get('href','')
-                if any(t in link for t in trusted):
-                    results.append(f"- {r.get('title','')}: {r.get('body','')} (Source: {link} - Trusted)")
-                if len(results) >= 5: break
-    except Exception: pass
-    return "\n".join(results) if results else "No trusted internet results found."
-def needs_search(text):
-    keywords = ["who is", "what is", "when", "where", "latest", "news", "today", "2025", "2026", "price", "how many", "current", "is it true", "fact"]
-    return any(k in text.lower() for k in keywords)
-
-# ---------- TYPO - SKIP SLANG ----------
-def check_typo(text):
-    if is_slang_only(text): return text, False
-    if len(text.strip()) < 4 or len(text.split()) < 2: return text, False
-    try:
-        resp = client.chat.completions.create(model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "You are spelling checker. If text has spelling mistake, return ONLY corrected sentence. If correct, return EXACTLY same. Do NOT correct slang, Pidgin, Yoruba, Igbo, Hausa, Gen Z like hwf, wyd, abeg, wahala, lol, tbh."},
-                      {"role": "user", "content": text}], temperature=0.0, max_tokens=150)
-        corrected = resp.choices[0].message.content.strip()
-        if corrected.lower() != text.lower() and len(corrected) > 0: return corrected, True
-        return text, False
-    except Exception: return text, False
-
-# ---------- SAFE CHAT ----------
-def safe_chat(messages, max_tokens=1024):
-    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
-    last_err = None
-    for model in models:
-        try:
-            resp = client.chat.completions.create(model=model, messages=messages, temperature=0.3, max_tokens=max_tokens)
-            return resp.choices[0].message.content
-        except Exception as e: last_err = e; continue
-    raise last_err
-
-# ---------- PICTURE - COMPRESS + GEMINI FIRST ----------
-def compress_image(img_bytes, max_size=800):
-    try:
-        img = Image.open(io.BytesIO(img_bytes))
-        img = img.convert("RGB")
-        if max(img.size) > max_size: img.thumbnail((max_size, max_size))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=80)
-        return buf.getvalue()
-    except Exception: return img_bytes
-
-def safe_vision(content_list, image_bytes_list):
-    # 1. GEMINI - free, e really dey see picture
-    try:
-        gemini_key = st.secrets.get("GEMINI_API_KEY", "")
-        if gemini_key and image_bytes_list:
-            img_b64 = base64.b64encode(image_bytes_list[0]).decode()
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-            payload = {"contents": [{"parts": [
-                {"text": "Describe this image in detail. Who is this character? What anime / show? What is he doing? Colours, pose, background?"},
-                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
-            ]}]}
-            r = requests.post(url, json=payload, timeout=20)
-            data = r.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+        gk, gcx = st.secrets.get("GOOGLE_API_KEY", ""), st.secrets.get("GOOGLE_CX", "")
+        if gk and gcx:
+            g = requests.get("https://www.googleapis.com/customsearch/v1",
+                             params={"key": gk, "cx": gcx, "q": query, "num": 5}, timeout=8).json()
+            for it in g.get("items", []):
+                results.append(f"- {it.get('title','')}: {it.get('snippet','')} (Source: {it.get('link','')})")
+            if results:
+                return "\n".join(results)
     except Exception as e:
-        print(f"Gemini failed: {e}")
-    # 2. GROQ fallback
-    vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-11b-vision-preview"]
-    for model in vision_models:
+        report("google search", e)
+    # 2. Wikipedia
+    try:
+        w = requests.get("https://en.wikipedia.org/w/api.php", params={
+            "action": "query", "generator": "search", "gsrsearch": query, "gsrlimit": 2,
+            "prop": "extracts", "exintro": 1, "explaintext": 1, "exsentences": 3, "format": "json"},
+            headers={"User-Agent": "EmmanuelAI/1.0"}, timeout=6).json()
+        for p in w.get("query", {}).get("pages", {}).values():
+            title = p.get("title", "")
+            results.append(f"- Wikipedia - {title}: {p.get('extract','')} "
+                           f"(Source: https://en.wikipedia.org/wiki/{title.replace(' ', '_')})")
+    except Exception as e:
+        report("wikipedia", e)
+    # 3. DuckDuckGo, trusted domains only
+    try:
         try:
-            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": content_list}], max_tokens=1024, temperature=0.2)
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        for r in DDGS().text(query, max_results=10):
+            link = r.get("href", "")
+            if is_trusted(link):
+                results.append(f"- {r.get('title','')}: {r.get('body','')} (Source: {link})")
+            if len(results) >= 5:
+                break
+    except Exception as e:
+        report("ddgs", e)
+    return "\n".join(results[:5])
+
+
+# =====================================================================
+# CHAT (streaming, with model fallback)
+# =====================================================================
+def build_system(user, lang, web="", mem=""):
+    s = SYSTEM_PROMPT + f"\n\nToday's date: {datetime.now():%A, %d %B %Y}.\nThe user's name is {user}."
+    if lang != AUTO:
+        s += f"\nReply in {lang}."
+    if web:
+        s += f"\n\nWEB SEARCH RESULTS (use only if relevant):\n{web}"
+    if mem:
+        s += f"\n\nFROM THIS USER'S APPROVED PAST ANSWERS:\n{mem}"
+    return s
+
+
+def get_history(messages, n=12):
+    return [{"role": m["role"], "content": m["content"][:800]} for m in messages[-n:]]
+
+
+def stream_chat(messages):
+    last_err = None
+    for model in CHAT_MODELS:
+        got_text = False
+        try:
+            stream = client.chat.completions.create(
+                model=model, messages=messages, temperature=0.4, max_tokens=1024, stream=True)
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    got_text = True
+                    yield delta
+            if got_text:
+                return
+        except Exception as e:
+            last_err = e
+            report(f"chat model {model}", e)
+            if got_text:  # failed mid-answer - keep what we already showed
+                return
+    raise last_err or RuntimeError("All chat models failed")
+
+
+# =====================================================================
+# IMAGES  (Gemini first, Groq vision as fallback)
+# =====================================================================
+def compress_image(img_bytes, max_size=1280):
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(img_bytes)))  # fixes rotated phone photos
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            bg = Image.new("RGB", img.size, "white")
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        else:
+            img = img.convert("RGB")
+        img.thumbnail((max_size, max_size))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except Exception as e:
+        report("compress_image", e)
+        return img_bytes
+
+
+def gemini_vision(system, history, question, images):
+    key = st.secrets.get("GEMINI_API_KEY", "")
+    if not key:
+        raise RuntimeError("No GEMINI_API_KEY in secrets")
+    contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]}
+                for m in history]
+    while contents and contents[0]["role"] == "model":
+        contents.pop(0)
+    parts = [{"text": question}] + [
+        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(b).decode()}} for b in images]
+    contents.append({"role": "user", "parts": parts})
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        headers={"x-goog-api-key": key},
+        json={"systemInstruction": {"parts": [{"text": system}]}, "contents": contents},
+        timeout=45)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:200]}")
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def groq_vision(system, history, question, images):
+    content = [{"type": "text", "text": question}] + [
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(b).decode()}}
+        for b in images]
+    messages = [{"role": "system", "content": system}] + history + [{"role": "user", "content": content}]
+    last_err = None
+    for model in GROQ_VISION_MODELS:
+        try:
+            resp = client.chat.completions.create(model=model, messages=messages, max_tokens=1024, temperature=0.3)
             return resp.choices[0].message.content
-        except Exception: continue
-    return "I no fit see image well for now. Abeg describe am."
+        except Exception as e:
+            last_err = e
+            report(f"groq vision {model}", e)
+    raise last_err or RuntimeError("All vision models failed")
 
-# ---------- VOICE ----------
+
+def vision_answer(system, history, question, images):
+    try:
+        return gemini_vision(system, history, question, images)
+    except Exception as e:
+        report("gemini_vision", e)
+    return groq_vision(system, history, question, images)
+
+
+# =====================================================================
+# VOICE  (speech-to-text with Groq Whisper, text-to-speech with edge-tts)
+# =====================================================================
 def transcribe_voice(audio_bytes):
-    for filename in ["voice.ogg", "voice.wav", "voice.mp3"]:
-        try:
-            trans = client.audio.transcriptions.create(file=(filename, audio_bytes), model="whisper-large-v3", response_format="text")
-            text = str(trans).strip()
-            if text: return text
-        except Exception: continue
-    return None
-
-# ---------- PER-USER HISTORY ----------
-def safe_name(name): return re.sub(r"[^a-zA-Z0-9_-]", "_", name.strip().lower()) or "guest"
-def chat_file(u): return f"chats_{safe_name(u)}.json"
-def memory_file(u): return f"memory_{safe_name(u)}.jsonl"
-def load_user_chats(u):
-    if os.path.exists(chat_file(u)):
-        try:
-            with open(chat_file(u), "r", encoding="utf-8") as f: return json.load(f)
-        except Exception: return []
-    return []
-def save_user_chats(u, messages):
+    if len(audio_bytes) < 2000:
+        return None  # too short to contain speech
     try:
-        with open(chat_file(u), "w", encoding="utf-8") as f: json.dump(messages[-200:], f)
-    except Exception: pass
-def load_memory(u):
-    memories = []
-    if os.path.exists(memory_file(u)):
-        try:
-            with open(memory_file(u), "r", encoding="utf-8") as f:
-                for line in f:
-                    try: memories.append(json.loads(line))
-                    except Exception: continue
-        except Exception: pass
-    return memories[-100:]
-def save_to_memory(u, user_q, ai_a, rating=""):
-    data = {"user": u, "q": user_q, "a": ai_a, "rating": rating}
+        t = client.audio.transcriptions.create(
+            file=("audio.wav", audio_bytes), model=WHISPER_MODEL, response_format="text")
+        return str(t).strip() or None
+    except Exception as e:
+        report("transcribe", e)
+        return None
+
+
+def clean_for_tts(text):
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"[*_#>`|]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()[:700]
+
+
+async def _tts(text, voice):
+    import edge_tts
+    out = b""
+    async for chunk in edge_tts.Communicate(text, voice).stream():
+        if chunk["type"] == "audio":
+            out += chunk["data"]
+    return out
+
+
+def speak(text, voice):
     try:
-        with open(memory_file(u), "a", encoding="utf-8") as f: f.write(json.dumps(data) + "\n")
-    except Exception: pass
-    if "learned" not in st.session_state: st.session_state.learned = []
-    st.session_state.learned.append(data)
-def get_relevant_memories(u, user_q):
-    all_mem = load_memory(u)
-    if "learned" in st.session_state: all_mem = all_mem + st.session_state.learned
-    all_mem = [m for m in all_mem if m.get("user", u) == u]
-    if not all_mem: return ""
-    words = set(re.findall(r"\w+", user_q.lower()))
-    scored = []
-    for m in all_mem:
-        m_words = set(re.findall(r"\w+", m.get("q","").lower()))
-        overlap = len(words & m_words)
-        if overlap >= 1: scored.append((overlap, m))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:3]
-    if not top: return ""
-    text = "\n".join([f"Past chat - User: {m['q']} | AI: {m['a'][:300]}" for _, m in top])
-    return f"\n\nLEARNED FROM PAST CHATS OF THIS USER:\n{text}"
+        return asyncio.run(_tts(clean_for_tts(text), voice)) or None
+    except Exception as e:
+        report("tts", e)
+        return None
 
-SYSTEM_PROMPT = """You are Emmanuel AI. You are VERY familiar with Nigerian slang, Pidgin, Gen Z slang, and all short forms.
-- hwf / hwf na / hwd = How far. Reply like "I dey o, hwf na?"
-- wyd = what are you doing, wbu = what about you, abeg, wahala, no wahala, japa, sapa, cruise, yarn, gist, gbam, e choke, shey, na wa, oga, my guy
-- If user uses slang, REPLY IN SAME STYLE. Don't be too formal.
-- If user types "hwf", NEVER say "I don't understand".
-- IMPORTANT: NEVER repeat the same greeting twice in one chat. If you already greeted user, continue the conversation. If user replies "I dey" after your greeting, do NOT say "hwf na" again. Ask the next thing.
-- Always use the chat history. Don't start fresh every time. Remember what user already told you.
-- For images, vision can be WRONG. Check with knowledge + web search. If fan-art, say so.
-- For anime: only canon facts. Never invent. If image is Meliodas, say Meliodas from Seven Deadly Sins. If Vegeta, say Vegeta from Dragon Ball.
-- If unsure, say "I'm not fully sure" in user's language.
-- Reply in SAME language user used.
-- For tables, keep SHORT - max 3 columns, fit phone.
-- NEVER show error codes. If fail, say friendly "Network wahala small, try again".
-"""
 
-# ---------- SESSION ----------
-if "messages" not in st.session_state: st.session_state.messages = []
-if "learned" not in st.session_state: st.session_state.learned = []
-if "saved_images" not in st.session_state: st.session_state.saved_images = []
-if "last_audio_id" not in st.session_state: st.session_state.last_audio_id = None
-if "username" not in st.session_state: st.session_state.username = None
-if "loaded_user" not in st.session_state: st.session_state.loaded_user = None
-if "pending_text" not in st.session_state: st.session_state.pending_text = None
-if "pending_corrected" not in st.session_state: st.session_state.pending_corrected = None
-if "chosen_lang" not in st.session_state: st.session_state.chosen_lang = "Auto - Detect my language"
+# =====================================================================
+# SESSION + LOGIN
+# =====================================================================
+for k, v in {"messages": [], "username": None, "uploader_key": 0, "audio_key": 0,
+             "last_audio_id": None, "teach_q": None, "pending_audio": None}.items():
+    st.session_state.setdefault(k, v)
 
 st.title("🤖 Emmanuel AI")
+
 if not st.session_state.username:
     st.caption("Welcome! Make I remember you.")
-    name_input = st.text_input("Enter your name / username to continue", placeholder="e.g. Emmanuel, John, Mary")
-    if st.button("Continue →"):
-        if name_input.strip():
-            st.session_state.username = name_input.strip()
-            st.session_state.messages = load_user_chats(st.session_state.username)
-            st.session_state.loaded_user = st.session_state.username
-            st.rerun()
-        else: st.warning("Please enter your name first.")
+    with st.form("login"):
+        name = st.text_input("Name / username")
+        pin = st.text_input("PIN (4+ characters)", type="password")
+        submitted = st.form_submit_button("Continue →")
+    if submitted:
+        if not name.strip() or len(pin) < 4:
+            st.warning("Enter your name and a PIN of at least 4 characters.")
+        else:
+            ok, msg = login(name.strip(), pin)
+            if ok:
+                st.session_state.username = name.strip()
+                st.session_state.messages = read_json(user_path("chats", name, "json"), [])
+                st.rerun()
+            else:
+                st.error(msg)
     st.stop()
 
 username = st.session_state.username
-if st.session_state.loaded_user != username:
-    st.session_state.messages = load_user_chats(username)
-    st.session_state.loaded_user = username
 
-c1, c2, c3 = st.columns([2, 1, 1])
-with c1: st.caption(f"👤 {username} • {len(st.session_state.messages)} messages saved")
-with c2:
+# ---------- SIDEBAR ----------
+with st.sidebar:
+    st.markdown(f"👤 **{username}**  \n{len(st.session_state.messages)} messages saved")
+    lang = st.selectbox("🌍 Language", list(LANGUAGES))
+    speak_on = st.toggle("🔊 Speak replies", value=False)
+    DEBUG = st.toggle("🐞 Debug mode", value=False)
     if st.button("🔄 Switch user"):
-        st.session_state.username = None; st.session_state.messages = []; st.session_state.loaded_user = None; st.rerun()
-with c3:
+        st.session_state.username = None
+        st.session_state.messages = []
+        st.rerun()
     if st.button("🗑️ Clear history"):
-        st.session_state.messages = []; save_user_chats(username, []); st.rerun()
+        st.session_state.messages = []
+        save_chats(username, [])
+        st.rerun()
 
-st.session_state.chosen_lang = st.selectbox("🌍 Language:", ["Auto - Detect my language", "English", "Pidgin", "Yoruba", "Igbo", "Hausa", "French", "Spanish", "Arabic", "Portuguese", "German", "Chinese"], index=0)
-if st.session_state.messages:
-    with st.expander(f"🕘 Your past chats ({len(st.session_state.messages)//2} chats)"):
-        for m in st.session_state.messages[-20:]:
-            if m["role"] == "user": st.markdown(f"**You:** {m['content'][:100]}")
-st.divider()
 
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]): st.markdown(m["content"])
+# ---------- FEEDBACK ----------
+def rate(idx, kind):
+    msgs = st.session_state.messages
+    q = msgs[idx - 1]["content"] if idx > 0 else ""
+    if kind == "good":
+        save_memory(st.session_state.username, q, msgs[idx]["content"], "good")
+        st.toast("Noted! I go remember this as correct ✅")
+    else:
+        st.session_state.teach_q = q
+        st.toast("Type the correct answer in your next message and I go learn am 🧠")
 
-# ---------- PICTURE UPLOAD ----------
-uploaded_files = st.file_uploader("📷 Upload image (max 3)", type=["jpg", "png", "jpeg"], accept_multiple_files=True, key="uploader")
-if uploaded_files:
-    new_images = []
-    for f in uploaded_files[:3]:
-        new_images.append({"name": f.name, "bytes": f.getvalue(), "type": f.type})
-    if new_images != st.session_state.saved_images:
-        st.session_state.saved_images = new_images
-if st.session_state.saved_images:
-    for img in st.session_state.saved_images:
-        st.image(img["bytes"], width=200, caption=f"Ready to send: {img['name']}")
-    if st.button("❌ Clear images"):
-        st.session_state.saved_images = []; st.rerun()
 
-# ---------- VOICE ----------
-audio_file = st.audio_input("🎤 Speak - any language")
+# ---------- ATTACHMENTS ----------
+with st.expander("📎 Add image  /  🎤 Speak"):
+    uploaded = st.file_uploader("Upload image (max 3)", type=["jpg", "jpeg", "png"],
+                                accept_multiple_files=True,
+                                key=f"uploader_{st.session_state.uploader_key}")
+    audio_file = st.audio_input("Speak - any language", key=f"audio_{st.session_state.audio_key}")
+
+uploaded = (uploaded or [])[:3]
+if uploaded:
+    st.caption(f"📷 {len(uploaded)} image(s) ready - they go with your next message.")
+
+# ---------- CHAT HISTORY ----------
+msgs = st.session_state.messages
+pending_audio = st.session_state.pending_audio
+st.session_state.pending_audio = None  # play once only
+
+for i, m in enumerate(msgs):
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+        if m.get("img"):
+            st.caption(f"📷 {m['img']} image(s) attached")
+        if m["role"] == "assistant":
+            b1, b2, _ = st.columns([1, 1, 6])
+            b1.button("👍", key=f"up_{i}", on_click=rate, args=(i, "good"))
+            b2.button("👎", key=f"down_{i}", on_click=rate, args=(i, "bad"))
+            if i == len(msgs) - 1 and pending_audio:
+                st.audio(pending_audio, format="audio/mp3", autoplay=True)
+
+# ---------- INPUT ----------
 user_text = None
-voice_text = None
+voice_used = False
 if audio_file:
-    audio_id = f"{audio_file.name}-{audio_file.size}"
+    audio_bytes = audio_file.getvalue()
+    audio_id = hashlib.md5(audio_bytes).hexdigest()
     if audio_id != st.session_state.last_audio_id:
         st.session_state.last_audio_id = audio_id
         with st.spinner("Listening..."):
-            audio_bytes = audio_file.getvalue()
-            voice_text = transcribe_voice(audio_bytes)
-            if voice_text:
-                st.success(f"You said: {voice_text}")
-                user_text = voice_text
-            else:
-                st.error("Voice wahala small, abeg try again - speak clear, close to phone, and make sure sound no too short (speak 2 seconds).")
+            user_text = transcribe_voice(audio_bytes)
+        if user_text:
+            voice_used = True
+        else:
+            st.error("Voice wahala small 🎤 - abeg try again: speak clear, close to the phone, "
+                     "and talk for at least 2 seconds.")
 
-if not user_text:
-    txt = st.chat_input("Ask anything - slang, pidgin, any language...")
-    if txt: user_text = txt
+typed = st.chat_input("Ask anything - slang, pidgin, any language...")
+if typed:
+    user_text = typed
 
-# TYPO FLOW
-if st.session_state.pending_text:
-    st.warning(f"🤔 Did you mean: **\"{st.session_state.pending_corrected}\"** ?")
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        if st.button("✅ Yes, that's what I mean"):
-            user_text = st.session_state.pending_corrected
-            st.session_state.pending_text = None; st.session_state.pending_corrected = None
-    with cc2:
-        if st.button("❌ No, use my original"):
-            user_text = st.session_state.pending_text
-            st.session_state.pending_text = None; st.session_state.pending_corrected = None
-    if not user_text: st.stop()
-
-if user_text and not st.session_state.pending_text:
-    if not is_slang_only(user_text):
-        corrected, has_typo = check_typo(user_text)
-        if has_typo:
-            st.session_state.pending_text = user_text
-            st.session_state.pending_corrected = corrected
-            st.rerun()
-
-# ---------- ANSWER - REMEMBER EVERYTHING ----------
+# ---------- ANSWER ----------
 if user_text:
-    expanded = expand_slang(user_text)
-    st.session_state.messages.append({"role": "user", "content": user_text})
-    save_user_chats(username, st.session_state.messages)
+    images = [compress_image(f.getvalue()) for f in uploaded]
+    history = get_history(msgs)  # taken BEFORE adding the new message
+
+    if st.session_state.teach_q:  # user pressed 👎 and is now giving the right answer
+        save_memory(username, st.session_state.teach_q, user_text, "corrected")
+        st.session_state.teach_q = None
+        st.toast("Learned! 🧠")
+
+    msgs.append({"role": "user", "content": user_text, **({"img": len(images)} if images else {})})
+    save_chats(username, msgs)
+
     with st.chat_message("user"):
         st.markdown(user_text)
-        if st.session_state.saved_images:
-            for img in st.session_state.saved_images: st.image(img["bytes"], width=250)
+        for im in images:
+            st.image(im, width=250)
 
+    answer = None
     with st.chat_message("assistant"):
-        with st.spinner("Looking at image / listening + searching..."):
-            try:
-                lang_instruction = f"\nUser language preference: {st.session_state.chosen_lang}." if st.session_state.chosen_lang != "Auto - Detect my language" else ""
-                final_question = f"User said (original): {user_text}\nUser said (expanded slang): {expanded}" + lang_instruction
-                if st.session_state.saved_images:
-                    content_list = [{"type": "text", "text": f"User asked: {user_text}. Describe this image in detail. Who is this character? What anime / show? What is he doing? Read all text in image."}]
-                    img_bytes_list = []
-                    for img in st.session_state.saved_images[:3]:
-                        small_bytes = compress_image(img["bytes"])
-                        img_bytes_list.append(small_bytes)
-                        b64 = base64.b64encode(small_bytes).decode()
-                        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-                    image_desc = safe_vision(content_list, img_bytes_list)
-                    final_question = f"User question: {user_text} (expanded: {expanded})\nVision saw: {image_desc}" + lang_instruction
-                web_info = ""
-                if needs_search(expanded) or st.session_state.saved_images:
-                    web_info = search_web(expanded)
-                    final_question += f"\n\nTRUSTED WEB SEARCH RESULTS:\n{web_info}"
-                mem_info = get_relevant_memories(username, expanded)
-                if mem_info: final_question += mem_info
-                # REMEMBER EVERYTHING - send last 12 chats so e no repeat
-                history = [{"role": m["role"], "content": m["content"][:600]} for m in st.session_state.messages[-13:-1]]
-                chat_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": final_question}]
-                ans = safe_chat(chat_messages)
-                st.markdown(ans)
-                st.session_state.messages.append({"role": "assistant", "content": ans})
-                save_user_chats(username, st.session_state.messages)
-                save_to_memory(username, user_text, ans)
-                st.session_state.saved_images = []
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("👍 Correct", key=f"up_{len(st.session_state.messages)}"):
-                        save_to_memory(username, user_text, ans, rating="good"); st.success("Noted! I go remember this as correct.")
-                with col2:
-                    if st.button("👎 Wrong - Teach me", key=f"down_{len(st.session_state.messages)}"):
-                        st.info("Tell me the correct answer for this in next chat, I go learn am.")
-            except Exception:
-                st.error("Network wahala small, abeg try again. If e continue, wait 1 min and press Send again.")
+        try:
+            web = ""
+            if not images and needs_search(user_text):
+                with st.spinner("Searching the web..."):
+                    web = search_web(user_text)
+            system = build_system(username, lang, web, relevant_memories(username, user_text))
+            if images:
+                with st.spinner("Looking at your image..."):
+                    answer = vision_answer(system, history, user_text, images)
+                st.markdown(answer)
+            else:
+                chat_messages = ([{"role": "system", "content": system}] + history
+                                 + [{"role": "user", "content": user_text}])
+                answer = st.write_stream(stream_chat(chat_messages))
+        except Exception as e:
+            report("answer", e)
+            st.error(FRIENDLY_ERROR)
+
+    if answer:
+        msgs.append({"role": "assistant", "content": answer})
+        save_chats(username, msgs)
+        if speak_on:
+            st.session_state.pending_audio = speak(answer, LANGUAGES[lang])
+        st.session_state.uploader_key += 1  # clears the uploaded images
+        if voice_used:
+            st.session_state.audio_key += 1  # clears the recorder
+        st.rerun()  # redraw history so 👍/👎 buttons appear
