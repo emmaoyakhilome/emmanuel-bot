@@ -1,4 +1,6 @@
-streamlit
+streamlit>=1.40
 groq
 requests
-duckduckgo-search
+Pillow
+ddgs
+edge-tts
